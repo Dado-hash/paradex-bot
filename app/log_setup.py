@@ -14,8 +14,8 @@ def log_setup():
     )
     handlers = [logging.StreamHandler()]
     if LOG_FILE:
-        log_filename = "/" + os.getenv("COIN") + "_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S.log")
-        directory = "log/" + os.getenv("COIN") + "/PROD" if os.getenv("IS_DEV").lower() == "false" else "/TESTNET"
+        log_filename = "/" + os.getenv("MARKET") + "_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S.log")
+        directory = "log/" + os.getenv("MARKET") + ("/PROD" if os.getenv("IS_DEV").lower() == "false" else "/TESTNET")
         if not os.path.exists(directory):
             os.makedirs(directory)
         handlers.append(logging.FileHandler(directory + log_filename))
