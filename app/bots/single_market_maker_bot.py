@@ -3,12 +3,11 @@ import logging
 import os
 import time
 from decimal import Decimal
-from typing import Any
 
 from paradex_py.common.order import OrderSide
 
 from app.bots.base_bot import BaseBot
-from app.exchanges.paradex import ParadexExchange
+from app.exchanges.base_exchange import BaseExchange
 from app.helpers.orders import get_unrealized_pnl_percent, get_best_order_price
 from app.helpers.utils import get_random_size
 from app.models.position_side import PositionSide
@@ -39,9 +38,9 @@ def get_order_size_for_open(same_side_position: dict | None, other_side_position
 
 
 class SingleMarketMakerBot(BaseBot):
-    _exchange: ParadexExchange = None
+    _exchange: BaseExchange
 
-    def __init__(self, exchange: Any):
+    def __init__(self, exchange: BaseExchange):
         self._exchange = exchange
 
     async def trading_loop(self):
@@ -137,9 +136,9 @@ class SingleMarketMakerBot(BaseBot):
                 continue
 
             if open_order is None:
-                await self._exchange.open_limit_order(order_side, order_size, best_price)
+                self._exchange.open_limit_order(order_side, order_size, best_price)
             else:
                 if best_price != Decimal(open_order["price"]):
-                    await self._exchange.modify_limit_order(open_order["id"], order_side, order_size, best_price)
+                    self._exchange.modify_limit_order(open_order["id"], order_side, order_size, best_price)
 
             await asyncio.sleep(float(os.getenv("PING_SECONDS")))

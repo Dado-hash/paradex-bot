@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from app.bots.parallel_market_maker_bot import ParallelMarketMakerBot
 from app.bots.single_market_maker_bot import SingleMarketMakerBot
 from app.exchanges.paradex import ParadexExchange
-from log_setup import log_setup
+from app.log_setup import log_setup
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

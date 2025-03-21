@@ -128,3 +128,14 @@ def test_get_limit_order_size_unfilled_size_minus_3(mock_time):
         other_position
     )
     assert result == (Decimal(2), OrderSide.Buy)
+
+@patch("time.time", return_value=1700000000)
+def test_get_limit_order_size_main_unfilled_size_none(mock_time):
+    main_position = {"size": "9", "created_at": "1700000000000"}
+    other_position = {"size": "5", "created_at": "1700000000000"}
+    result = get_limit_order_size(
+        OrderSide.Sell,
+        main_position,
+        other_position
+    )
+    assert result == (None, None)

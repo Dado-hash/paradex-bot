@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from paradex_py.common.order import OrderSide
 
-from app.exchanges.paradex import ParadexExchange
+from app.exchanges.base_exchange import BaseExchange
 from app.models.position_side import PositionSide
 
 
@@ -16,7 +16,7 @@ def remove_exist_order_for_orders_list(orders: list[(Decimal, Decimal)], exist_o
     return orders
 
 
-def get_unrealized_pnl_percent(exchange: ParadexExchange, position: dict) -> Decimal:
+def get_unrealized_pnl_percent(exchange: BaseExchange, position: dict) -> Decimal:
     side = PositionSide(position.get("side"))
     average_entry_price = Decimal(position.get("average_entry_price"))
     leverage = Decimal(os.getenv("MAX_LEVERAGE"))
@@ -35,7 +35,7 @@ def get_unrealized_pnl_percent(exchange: ParadexExchange, position: dict) -> Dec
         return pnl_percent
 
 
-def get_best_order_price(exchange: ParadexExchange, side: OrderSide, max_steps_gap: Decimal = Decimal(3),
+def get_best_order_price(exchange: BaseExchange, side: OrderSide, max_steps_gap: Decimal = Decimal(3),
                          depth: int = 3,
                          exist_order: (Decimal, Decimal) = None, from_order=0):
     step = Decimal(os.getenv("PRICE_STEP"))
@@ -46,8 +46,8 @@ def get_best_order_price(exchange: ParadexExchange, side: OrderSide, max_steps_g
         depth = min(depth, len(orders) - 1)
 
         for i in range(from_order, depth):
-            price_1, volume_1 = orders[i]
-            price_2, volume_2 = orders[i + 1]
+            price_1, _ = orders[i]
+            price_2, _ = orders[i + 1]
 
             step_gap = (price_1 - price_2) / step
 
@@ -64,8 +64,8 @@ def get_best_order_price(exchange: ParadexExchange, side: OrderSide, max_steps_g
         depth = min(depth, len(orders) - 1)
 
         for i in range(from_order, depth):
-            price_1, volume_1 = orders[i]
-            price_2, volume_2 = orders[i + 1]
+            price_1, _ = orders[i]
+            price_2, _ = orders[i + 1]
 
             step_gap = (price_2 - price_1) / step
 

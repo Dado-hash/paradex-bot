@@ -3,12 +3,11 @@ import logging
 import os
 import time
 from decimal import Decimal
-from typing import Any
 
 from paradex_py.common.order import OrderSide
 
 from app.bots.base_bot import BaseBot
-from app.exchanges.paradex import ParadexExchange
+from app.exchanges.base_exchange import BaseExchange
 from app.helpers.orders import get_best_order_price
 
 
@@ -43,7 +42,7 @@ def get_unfilled_size(position: dict | None) -> Decimal | None:
     if main_not_filled_size < 0:
         return main_not_filled_size
 
-    if main_not_filled_size < Decimal(os.getenv("MARKET_MIN_ORDER_SIZE")):
+    if main_not_filled_size < Decimal(os.getenv("MARKET_MIN_ORDER_SIZE")) or main_not_filled_size == 0:
         return None
 
     return main_not_filled_size
@@ -75,6 +74,9 @@ def get_limit_order_size(main_order_side: OrderSide, main_position: dict | None,
         if main_unfilled_size < 0:
             return abs(main_unfilled_size), main_order_side.opposite_side()
 
+    if main_unfilled_size is None:
+        return None, None
+
     if main_unfilled_size < 0:
         return abs(main_unfilled_size), main_order_side.opposite_side()
     return abs(main_unfilled_size), main_order_side
@@ -94,10 +96,10 @@ def get_depth(main_position, other_position) -> int:
 
 
 class ParallelMarketMakerBot(BaseBot):
-    _exchange1: ParadexExchange = None
-    _exchange2: ParadexExchange = None
+    _exchange1: BaseExchange
+    _exchange2: BaseExchange
 
-    def __init__(self, exchange1: Any, exchange2: Any):
+    def __init__(self, exchange1: BaseExchange, exchange2: BaseExchange):
         self._exchange1 = exchange1
         self._exchange2 = exchange2
 
@@ -121,8 +123,8 @@ class ParallelMarketMakerBot(BaseBot):
                 await self._exchange1.critical_close_all()
                 await self._exchange2.critical_close_all()
 
-    async def __side_trading(self, main_order_side: OrderSide, main_account: ParadexExchange,
-                             other_account: ParadexExchange):
+    async def __side_trading(self, main_order_side: OrderSide, main_account: BaseExchange,
+                             other_account: BaseExchange):
         while True:
             open_order = None
             if len(main_account.open_orders) > 1:
@@ -150,7 +152,7 @@ class ParallelMarketMakerBot(BaseBot):
                 if market_size and order_size and market_is_reduce == is_reduce:
                     main_account.cancel_all_orders()
                     await asyncio.sleep(float(os.getenv("PING_SECONDS")))
-                    await main_account.open_market_order(order_side, market_size, is_reduce)
+                    main_account.open_market_order(order_side, market_size, is_reduce)
                     await asyncio.sleep(float(os.getenv("PING_SECONDS")))
                     continue
 
@@ -162,10 +164,10 @@ class ParallelMarketMakerBot(BaseBot):
                                                   open_order["size"])) if open_order is not None else None, 0)
 
             if open_order is None:
-                await main_account.open_limit_order(order_side, order_size, best_price, is_reduce)
+                main_account.open_limit_order(order_side, order_size, best_price, is_reduce)
             else:
                 if best_price != Decimal(open_order["price"]):
-                    await main_account.modify_limit_order(open_order["id"], order_side, order_size, best_price,
-                                                          is_reduce)
+                    main_account.modify_limit_order(open_order["id"], order_side, order_size, best_price,
+                                                    is_reduce)
 
             await asyncio.sleep(float(os.getenv("PING_SECONDS")))

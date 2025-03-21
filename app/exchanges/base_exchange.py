@@ -26,13 +26,17 @@ class BaseExchange(ABC):
         pass
 
     @abstractmethod
-    async def modify_limit_order(self, order_id: str, order_side: OrderSide, order_size: Decimal, price: Decimal,
-                                 is_reduce: bool) -> dict | None:
+    def modify_limit_order(self, order_id: str, order_side: OrderSide, order_size: Decimal, price: Decimal,
+                           is_reduce: bool = False) -> dict | None:
         pass
 
     @abstractmethod
-    async def open_limit_order(self, order_side: OrderSide, order_size: Decimal, price: Decimal,
-                               is_reduce: bool) -> dict | None:
+    def open_limit_order(self, order_side: OrderSide, order_size: Decimal, price: Decimal,
+                         is_reduce: bool = False) -> dict | None:
+        pass
+
+    @abstractmethod
+    def open_market_order(self, order_side: OrderSide, order_size: Decimal, is_reduce: bool = False):
         pass
 
     @abstractmethod

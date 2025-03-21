@@ -5,11 +5,10 @@ from decimal import Decimal
 
 from paradex_py import Paradex
 from paradex_py.api.ws_client import ParadexWebsocketChannel
-from paradex_py.common.order import OrderType, OrderSide, OrderStatus, Order
+from paradex_py.common.order import OrderType, OrderSide, Order
 from paradex_py.environment import PROD, TESTNET
 
 from app.exchanges.base_exchange import BaseExchange
-from app.models.position_side import PositionSide
 
 
 class ParadexExchange(BaseExchange):
@@ -95,8 +94,8 @@ class ParadexExchange(BaseExchange):
         if "account_value" in data:
             self.balance = Decimal(data["account_value"])
 
-    async def modify_limit_order(self, order_id: str, order_side: OrderSide, order_size: Decimal, price: Decimal,
-                                 is_reduce: bool = False):
+    def modify_limit_order(self, order_id: str, order_side: OrderSide, order_size: Decimal, price: Decimal,
+                           is_reduce: bool = False):
         try:
             request_order = Order(
                 order_id=order_id,
@@ -108,15 +107,12 @@ class ParadexExchange(BaseExchange):
                 instruction="POST_ONLY",
                 reduce_only=is_reduce
             )
-            order = self._client.api_client.modify_order(order_id, request_order)
-
-            return await self.__check_order_after_open(order["id"])
+            self._client.api_client.modify_order(order_id, request_order)
         except Exception as e:
             logging.exception(e)
-            return None
 
-    async def open_limit_order(self, order_side: OrderSide, order_size: Decimal, price: Decimal,
-                               is_reduce: bool = False) -> str | None:
+    def open_limit_order(self, order_side: OrderSide, order_size: Decimal, price: Decimal,
+                         is_reduce: bool = False) -> str | None:
         try:
             request_order = Order(
                 market=os.getenv("MARKET"),
@@ -127,14 +123,11 @@ class ParadexExchange(BaseExchange):
                 instruction="POST_ONLY",
                 reduce_only=is_reduce
             )
-            order = self._client.api_client.submit_order(request_order)
-
-            return await self.__check_order_after_open(order["id"])
+            self._client.api_client.submit_order(request_order)
         except Exception as e:
             logging.exception(e)
-            return None
 
-    async def open_market_order(self, order_side: OrderSide, order_size: Decimal, is_reduce: bool = False):
+    def open_market_order(self, order_side: OrderSide, order_size: Decimal, is_reduce: bool = False):
         try:
             request_order = Order(
                 market=os.getenv("MARKET"),
@@ -145,46 +138,15 @@ class ParadexExchange(BaseExchange):
                 reduce_only=is_reduce,
                 instruction="IOC"
             )
-            order = self._client.api_client.submit_order(request_order)
-
-            return await self.__check_order_after_open(order["id"])
+            self._client.api_client.submit_order(request_order)
         except Exception as e:
             logging.exception(e)
-            return None
-
-    async def __check_order_after_open(self, order_id: str):
-        await asyncio.sleep(float(os.getenv("PING_SECONDS")))
-
-        order = next((x for x in self.open_orders if x["id"] == order_id), None)
-
-        if order is not None:
-            order_side = OrderSide(order['side'])
-
-            if OrderStatus(order['status']) == OrderStatus.OPEN:
-                logging.info(f"{order_side} order OPENED: {order_id}")
-                return order_id
-
-            if order["cancel_reason"] == '':
-                positions = self.open_positions or []
-                position = next(filter(
-                    lambda x: PositionSide[x['side']].is_same_side_with_order(
-                        order_side), positions), None)
-
-                if position is not None:
-                    logging.warning(f"{order_side} position ALREADY OPENED")
-                    return ''
-
-            if order["cancel_reason"] == 'NOT_ENOUGH_MARGIN':
-                return ''
-
-        logging.critical(f"Order OPEN_FAILED: {order_id}")
-        return None
 
     def cancel_all_orders(self):
         try:
             self._client.api_client.cancel_all_orders()
         except Exception as e:
-            pass
+            logging.exception(e)
 
     def close_all_positions(self):
         for position in self.open_positions:
