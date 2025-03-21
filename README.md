@@ -1,6 +1,6 @@
 # Paradex Trading Bot (Market making strategy)
 
-![codecov](https://codecov.io/gh/Ham1et/paradex-bot/graph/badge.svg?token=E6XtGNKslf)
+![codecov](https://codecov.io/gh/Ham1et/paradex-bot/branch/master/graph/badge.svg?token=E6XtGNKslf)
 ![GitHub Workflow Status](https://github.com/Ham1et/paradex-bot/actions/workflows/python-app.yml/badge.svg?branch=master)
 ![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=Ham1et_paradex-bot&metric=sqale_rating&token=d4621e5830d7195cb9b8ad829049ce73773258ff)
 
