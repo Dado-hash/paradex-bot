@@ -3,15 +3,16 @@ from decimal import Decimal
 
 from paradex_py.common.order import OrderSide
 
+from app.models.data_order import DataOrder
+from app.models.data_position import DataPosition
+
 
 class BaseExchange(ABC):
-    _client = None
-
     buy_orders_list: list[(Decimal, Decimal)] = []
     sell_orders_list: list[(Decimal, Decimal)] = []
 
-    open_orders: list[dict] = []
-    open_positions: list[dict] = []
+    open_orders: list[DataOrder] = []
+    open_positions: list[DataPosition] = []
 
     mark_price: Decimal | None = None
 
@@ -19,10 +20,6 @@ class BaseExchange(ABC):
 
     @abstractmethod
     def __init__(self):
-        pass
-
-    @abstractmethod
-    async def init_data_streams(self) -> None:
         pass
 
     @abstractmethod

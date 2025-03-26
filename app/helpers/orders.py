@@ -5,6 +5,7 @@ from decimal import Decimal
 from paradex_py.common.order import OrderSide
 
 from app.exchanges.base_exchange import BaseExchange
+from app.models.data_position import DataPosition
 from app.models.position_side import PositionSide
 
 
@@ -16,9 +17,9 @@ def remove_exist_order_for_orders_list(orders: list[(Decimal, Decimal)], exist_o
     return orders
 
 
-def get_unrealized_pnl_percent(exchange: BaseExchange, position: dict) -> Decimal:
-    side = PositionSide(position.get("side"))
-    average_entry_price = Decimal(position.get("average_entry_price"))
+def get_unrealized_pnl_percent(exchange: BaseExchange, position: DataPosition) -> Decimal:
+    side = PositionSide(position.side)
+    average_entry_price = Decimal(position.average_entry_price)
     leverage = Decimal(os.getenv("MAX_LEVERAGE"))
 
     if side == PositionSide.LONG:

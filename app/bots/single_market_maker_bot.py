@@ -3,14 +3,16 @@ import logging
 import os
 import time
 from decimal import Decimal
+from typing import Optional
 
 from paradex_py.common.order import OrderSide
 
 from app.bots.base_bot import BaseBot
 from app.exchanges.base_exchange import BaseExchange
 from app.helpers.orders import get_unrealized_pnl_percent, get_best_order_price
-from app.helpers.utils import get_random_size
-from app.models.position_side import PositionSide
+from app.helpers.utils import get_random_size, get_attribute
+from app.models.data_order import DataOrder
+from app.models.data_position import DataPosition
 
 
 def get_order_size_for_open(same_side_position: dict | None, other_side_position: dict | None) -> Decimal | None:
@@ -65,11 +67,11 @@ class SingleMarketMakerBot(BaseBot):
     async def __side_trading(self, order_side: OrderSide):
         while True:
             positions = self._exchange.open_positions or []
-            same_side_position: dict | None = next(filter(
-                lambda x: PositionSide[x["side"]].is_same_side_with_order(
+            same_side_position: DataPosition | None = next(filter(
+                lambda x: x.side.is_same_side_with_order(
                     order_side), positions), None)
-            other_side_position: dict | None = next(filter(
-                lambda x: not PositionSide[x["side"]].is_same_side_with_order(
+            other_side_position: DataPosition | None = next(filter(
+                lambda x: not x.side.is_same_side_with_order(
                     order_side), positions), None)
 
             if same_side_position is not None:
@@ -85,27 +87,24 @@ class SingleMarketMakerBot(BaseBot):
                     await self._exchange.critical_close_all()
                     await asyncio.sleep(1)
                     continue
-                elif "created_at" in same_side_position and float(
-                        same_side_position["created_at"]) / 1000 + float(
-                    os.getenv("MAX_TAKER_POSITION_TIME_SECONDS")) < time.time():
+                elif float(get_attribute(same_side_position, "created_at") or 0) / 1000 + float(
+                        os.getenv("MAX_TAKER_POSITION_TIME_SECONDS")) < time.time():
                     logging.critical("Max position time limit reached")
                     await self._exchange.critical_close_all()
                     await asyncio.sleep(1)
                     continue
 
             elif other_side_position is not None:
-                if "created_at" in other_side_position and float(
-                        other_side_position["created_at"]) / 1000 + float(
-                    os.getenv("MIN_POSITION_TIME_SECONDS")) > time.time():
+                if float(get_attribute(other_side_position, "created_at") or 0) / 1000 + float(
+                        os.getenv("MIN_POSITION_TIME_SECONDS")) > time.time():
                     self._exchange.cancel_all_orders()
                     # Sleep until min position time is coming
-                    await asyncio.sleep(float(
-                        other_side_position["created_at"]) / 1000 + float(
+                    await asyncio.sleep(float(get_attribute(other_side_position, "created_at") or 0) / 1000 + float(
                         os.getenv("MIN_POSITION_TIME_SECONDS")) - time.time())
                     continue
 
-            open_orders = list(filter(lambda x: OrderSide(x["side"]) == order_side, self._exchange.open_orders or []))
-            open_order = None
+            open_orders = list(filter(lambda x: x.side == order_side, self._exchange.open_orders or []))
+            open_order: Optional[DataOrder] = None
             if len(open_orders) > 1:
                 self._exchange.cancel_all_orders()
                 await asyncio.sleep(float(os.getenv("PING_SECONDS")))
@@ -116,8 +115,7 @@ class SingleMarketMakerBot(BaseBot):
             depth = int(os.getenv("DEFAULT_DEPTH_ORDER_BOOK_ANALYSIS"))
             if other_side_position is not None:
                 pnl_percent = get_unrealized_pnl_percent(self._exchange, other_side_position)
-                if ("created_at" in other_side_position and float(
-                        other_side_position["created_at"]) / 1000 + float(
+                if (other_side_position and float(get_attribute(other_side_position, "created_at") or 0) / 1000 + float(
                     os.getenv("MAX_MAKER_POSITION_TIME_SECONDS")) < time.time()) or (
                         pnl_percent > Decimal(os.getenv("TAKE_PROFIT_MAKER_THRESHOLD"))) or (
                         pnl_percent < -Decimal(os.getenv("STOP_LOSS_MAKER_THRESHOLD"))):
@@ -125,8 +123,8 @@ class SingleMarketMakerBot(BaseBot):
 
             best_price = get_best_order_price(self._exchange, order_side, Decimal(os.getenv("MAX_PRICE_STEPS_GAP")),
                                               depth,
-                                              (Decimal(open_order["price"]), Decimal(
-                                                  open_order["size"])) if open_order is not None else None, 0)
+                                              (Decimal(open_order.price), Decimal(
+                                                  open_order.size)) if open_order is not None else None, 0)
             order_size = get_order_size_for_open(same_side_position, other_side_position)
 
             if order_size is None:
@@ -138,7 +136,7 @@ class SingleMarketMakerBot(BaseBot):
             if open_order is None:
                 self._exchange.open_limit_order(order_side, order_size, best_price)
             else:
-                if best_price != Decimal(open_order["price"]):
-                    self._exchange.modify_limit_order(open_order["id"], order_side, order_size, best_price)
+                if best_price != Decimal(open_order.price):
+                    self._exchange.modify_limit_order(open_order.id, order_side, order_size, best_price)
 
             await asyncio.sleep(float(os.getenv("PING_SECONDS")))

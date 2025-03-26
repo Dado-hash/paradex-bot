@@ -6,6 +6,7 @@ import pytest
 
 from app.exchanges.paradex import ParadexExchange
 from app.helpers.orders import get_unrealized_pnl_percent
+from app.models.data_position import DataPosition
 from app.models.position_side import PositionSide
 
 
@@ -23,20 +24,14 @@ def mock_exchange():
 
 
 def test_get_unrealized_pnl_percent_long(mock_exchange):
-    position = {
-        "side": PositionSide.LONG.value,
-        "average_entry_price": "80"
-    }
+    position = DataPosition(side=PositionSide.LONG, average_entry_price=Decimal(80))
     result = get_unrealized_pnl_percent(mock_exchange, position)
     expected = (Decimal('100') - Decimal('80')) / Decimal('80') * Decimal('5')
     assert result == expected
 
 
 def test_get_unrealized_pnl_percent_short(mock_exchange):
-    position = {
-        "side": PositionSide.SHORT.value,
-        "average_entry_price": "100"
-    }
+    position = DataPosition(side=PositionSide.SHORT, average_entry_price=Decimal(100))
     result = get_unrealized_pnl_percent(mock_exchange, position)
     expected = (Decimal('100') - Decimal('90')) / Decimal('100') * Decimal('5')
     assert result == expected

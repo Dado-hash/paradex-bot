@@ -9,12 +9,15 @@ from paradex_py.common.order import OrderSide
 from app.bots.base_bot import BaseBot
 from app.exchanges.base_exchange import BaseExchange
 from app.helpers.orders import get_best_order_price
+from app.helpers.utils import get_attribute
+from app.models.data_position import DataPosition
 
 
-def get_market_order_size(main_position: dict | None, other_position: dict | None) -> tuple[Decimal, bool] | tuple[
-    None, None]:
-    main_size = abs(Decimal(main_position["size"])) if main_position else 0
-    other_size = abs(Decimal(other_position["size"])) if other_position else 0
+def get_market_order_size(main_position: DataPosition | None, other_position: DataPosition | None) -> tuple[
+                                                                                                          Decimal, bool] | \
+                                                                                                      tuple[None, None]:
+    main_size = abs(Decimal(main_position.size)) if main_position else 0
+    other_size = abs(Decimal(other_position.size)) if other_position else 0
     diff = main_size - other_size
 
     if diff > 0:
@@ -24,20 +27,19 @@ def get_market_order_size(main_position: dict | None, other_position: dict | Non
     return None, None
 
 
-def is_time_to_close_position(position1: dict, position2: dict) -> bool:
+def is_time_to_close_position(position1: DataPosition | None, position2: DataPosition | None) -> bool:
     positions = [pos for pos in [position1, position2] if pos is not None]
     for position in positions:
-        if "created_at" in position and float(
-                position["created_at"]) / 1000 + float(os.getenv("POSITION_TIME_THRESHOLD_SECONDS")) < time.time():
+        if float(get_attribute(position, "created_at") or 0) / 1000 + float(os.getenv("POSITION_TIME_THRESHOLD_SECONDS")) < time.time():
             return True
     return False
 
 
-def get_unfilled_size(position: dict | None) -> Decimal | None:
+def get_unfilled_size(position: DataPosition | None) -> Decimal | None:
     if position is None:
         return Decimal(os.getenv("DEFAULT_ORDER_SIZE"))
 
-    main_not_filled_size = Decimal(os.getenv("DEFAULT_ORDER_SIZE")) - abs(Decimal(position["size"]))
+    main_not_filled_size = Decimal(os.getenv("DEFAULT_ORDER_SIZE")) - abs(Decimal(position.size))
 
     if main_not_filled_size < 0:
         return main_not_filled_size
@@ -48,13 +50,13 @@ def get_unfilled_size(position: dict | None) -> Decimal | None:
     return main_not_filled_size
 
 
-def get_limit_order_size(main_order_side: OrderSide, main_position: dict | None,
-                         other_position: dict | None) -> tuple[Decimal | None, OrderSide] | tuple[None, None]:
+def get_limit_order_size(main_order_side: OrderSide, main_position: DataPosition | None,
+                         other_position: DataPosition | None) -> tuple[Decimal | None, OrderSide] | tuple[None, None]:
     if is_time_to_close_position(main_position, other_position):
         if main_position is None:
             return None, None
 
-        return abs(Decimal(main_position["size"])), main_order_side.opposite_side()
+        return abs(Decimal(main_position.size)), main_order_side.opposite_side()
 
     if main_position is None and other_position is None:
         return Decimal(os.getenv("DEFAULT_ORDER_SIZE")), main_order_side
@@ -69,8 +71,8 @@ def get_limit_order_size(main_order_side: OrderSide, main_position: dict | None,
     other_unfilled_size = get_unfilled_size(other_position)
 
     if other_unfilled_size is None and other_position is not None and main_position is not None:
-        main_unfilled_size = min(abs(Decimal(other_position["size"])) - abs(Decimal(main_position["size"])),
-                                 Decimal(os.getenv("DEFAULT_ORDER_SIZE")) - abs(Decimal(main_position["size"])))
+        main_unfilled_size = min(abs(Decimal(other_position.size)) - abs(Decimal(main_position.size)),
+                                 Decimal(os.getenv("DEFAULT_ORDER_SIZE")) - abs(Decimal(main_position.size)))
         if main_unfilled_size < 0:
             return abs(main_unfilled_size), main_order_side.opposite_side()
 
@@ -82,8 +84,8 @@ def get_limit_order_size(main_order_side: OrderSide, main_position: dict | None,
     return abs(main_unfilled_size), main_order_side
 
 
-def get_depth(main_position, other_position) -> int:
-    if main_position and other_position and (main_position["size"] != other_position["size"]):
+def get_depth(main_position: DataPosition | None, other_position: DataPosition | None) -> int:
+    if main_position and other_position and (main_position.size != other_position.size):
         return 0
 
     if main_position is None and other_position is not None:
@@ -160,14 +162,14 @@ class ParallelMarketMakerBot(BaseBot):
 
             best_price = get_best_order_price(main_account, order_side, Decimal(os.getenv("MAX_PRICE_STEPS_GAP")),
                                               depth,
-                                              (Decimal(open_order["price"]), Decimal(
-                                                  open_order["size"])) if open_order is not None else None, 0)
+                                              (Decimal(open_order.price), Decimal(
+                                                  open_order.size)) if open_order is not None else None, 0)
 
             if open_order is None:
                 main_account.open_limit_order(order_side, order_size, best_price, is_reduce)
             else:
-                if best_price != Decimal(open_order["price"]):
-                    main_account.modify_limit_order(open_order["id"], order_side, order_size, best_price,
+                if best_price != Decimal(open_order.price):
+                    main_account.modify_limit_order(open_order.id, order_side, order_size, best_price,
                                                     is_reduce)
 
             await asyncio.sleep(float(os.getenv("PING_SECONDS")))

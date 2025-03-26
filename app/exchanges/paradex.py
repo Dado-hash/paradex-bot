@@ -9,30 +9,38 @@ from paradex_py.common.order import OrderType, OrderSide, Order
 from paradex_py.environment import PROD, TESTNET
 
 from app.exchanges.base_exchange import BaseExchange
+from app.helpers.utils import get_attribute
+from app.models.data_order import DataOrder
+from app.models.data_position import DataPosition
+from app.models.position_side import PositionSide
 
 
 class ParadexExchange(BaseExchange):
+    _client: Paradex
+
     def __init__(self, L1_ADDRESS: str, L2_PRIVATE_KEY: str):
         API_ENV = PROD if os.getenv("IS_DEV").lower() == "false" else TESTNET
         self._client = Paradex(env=API_ENV, l1_address=L1_ADDRESS,
                                l2_private_key=L2_PRIVATE_KEY)
 
     async def setup(self):
-        await self.init_data_streams()
+        await self.__init_data_streams()
         if os.getenv("INITIAL_CLOSE_ALL_POSITIONS").lower() == "true":
             await self.critical_close_all()
+        else:
+            self.cancel_all_orders()
         await asyncio.sleep(10)
 
-    async def init_data_streams(self):
+    async def __init_data_streams(self):
         await self._client.ws_client.connect()
         await self._client.ws_client.subscribe(ParadexWebsocketChannel.ORDER_BOOK,
                                                self.__price_websocket,
                                                params={"market": os.getenv("MARKET"), "refresh_rate": "50ms"})
         await self._client.ws_client.subscribe(ParadexWebsocketChannel.ORDERS,
-                                               self.orders_websocket,
+                                               self.__orders_websocket,
                                                params={"market": os.getenv("MARKET")})
         await self._client.ws_client.subscribe(ParadexWebsocketChannel.POSITIONS,
-                                               self.positions_websocket)
+                                               self.__positions_websocket)
         await self._client.ws_client.subscribe(ParadexWebsocketChannel.MARKETS_SUMMARY,
                                                self.__market_summary_websocket)
         await self._client.ws_client.subscribe(ParadexWebsocketChannel.ACCOUNT,
@@ -42,9 +50,11 @@ class ParadexExchange(BaseExchange):
     async def __reinit_data(self):
         while True:
             try:
-                self.open_orders = [order for order in self._client.api_client.fetch_orders()['results'] if
+                self.open_orders = [self.__dict_to_order(order) for order in
+                                    self._client.api_client.fetch_orders()['results'] if
                                     order['status'] == 'OPEN']
-                self.open_positions = [position for position in self._client.api_client.fetch_positions()['results'] if
+                self.open_positions = [self.__dict_to_position(position) for position in
+                                       self._client.api_client.fetch_positions()['results'] if
                                        position['status'] == 'OPEN']
             except Exception as e:
                 logging.exception(e)
@@ -70,19 +80,32 @@ class ParadexExchange(BaseExchange):
         if data["status"] == "CLOSED":
             items = [x for x in items if x["id"] != data["id"]]
         elif data["status"] == "OPEN":
-            len_before = len(items)
-            items = [data if x["id"] == data["id"] else x for x in items]
-            if len_before == len(items):
+            if any(item["id"] == data["id"] for item in items):
+                items = [data if x["id"] == data["id"] else x for x in items]
+            else:
                 items.append(data)
-        self.__setattr__(items_list, items)
+        if items_list == "open_orders":
+            self.__setattr__(items_list, [self.__dict_to_order(x) for x in items])
+        elif items_list == "open_positions":
+            self.__setattr__(items_list, [self.__dict_to_position(x) for x in items])
 
-    async def orders_websocket(self, _, message) -> None:
+    async def __orders_websocket(self, _, message) -> None:
         data = message["params"]["data"]
         await self.__handle_websocket_data(data, "open_orders")
 
-    async def positions_websocket(self, _, message) -> None:
+    def __dict_to_order(self, data: dict):
+        return DataOrder(id=data["id"], side=OrderSide(data["side"]), price=Decimal(data["price"]),
+                         size=Decimal(data["size"]))
+
+    async def __positions_websocket(self, _, message) -> None:
         data = message["params"]["data"]
         await self.__handle_websocket_data(data, "open_positions")
+
+    def __dict_to_position(self, data: dict):
+        return DataPosition(id=data["id"], market=data["market"], size=Decimal(data["size"]),
+                            side=PositionSide(data["side"]),
+                            average_entry_price=Decimal(data["average_entry_price"]),
+                            created_at=get_attribute(data, "created_at"))
 
     async def __market_summary_websocket(self, _, message: dict) -> None:
         data = message["params"]["data"]
@@ -150,12 +173,12 @@ class ParadexExchange(BaseExchange):
 
     def close_all_positions(self):
         for position in self.open_positions:
-            if abs(Decimal(position['size'])) > 0:
+            if abs(Decimal(position.size)) > 0:
                 order = Order(
-                    market=position['market'],
+                    market=position.market,
                     order_type=OrderType.Market,
-                    order_side=OrderSide.Sell if position['side'] == 'LONG' else OrderSide.Buy,
-                    size=abs(Decimal(position['size'])),
+                    order_side=OrderSide.Sell if position.side.value == 'LONG' else OrderSide.Buy,
+                    size=abs(Decimal(position.size)),
                     reduce_only=True
                 )
                 self._client.api_client.submit_order(order=order)
