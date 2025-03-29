@@ -59,6 +59,10 @@ class BackpackExchange(BaseExchange):
                      x["positionId"]) else get_time_now_milliseconds()})
                 for x in
                 self._client.get_open_positions()]
+
+            self.open_orders = [self.__dict_to_order({"i": x["id"], "S": x["side"], "p": x["price"], "q": x["quantity"]})
+                                for x in
+                                self._client.get_open_orders() if x["orderType"] == "Limit"]
         except Exception as e:
             logging.exception(e)
 
@@ -107,7 +111,7 @@ class BackpackExchange(BaseExchange):
             elif data["e"] == "orderFill":
                 if any(x.id == data["i"] and x.size > Decimal(data["l"]) for x in self.open_orders):
                     self.open_orders = [
-                        self.__dict_to_order({**data, 'q': x.size - Decimal(x['l']), 'p': x.price}) if x.id == data[
+                        self.__dict_to_order({**data, 'q': x.size - Decimal(data['l']), 'p': x.price}) if x.id == data[
                             "i"] else x for x in
                         self.open_orders]
                 else:

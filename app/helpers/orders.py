@@ -80,4 +80,4 @@ def get_best_order_price(exchange: BaseExchange, side: GenericOrderSide, max_ste
 
         return max(orders[from_order][0] - step, exchange.buy_orders_list[0][0] + step,
                    (exchange.mark_price + step * Decimal(
-                       os.getenv("MIN_MARK_PRICE_PRICE_GAPS")) if exchange.mark_price else 0))
+                       os.getenv("MIN_MARK_PRICE_PRICE_GAPS"))) if exchange.mark_price else 0)

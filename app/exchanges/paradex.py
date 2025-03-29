@@ -117,10 +117,10 @@ class ParadexExchange(BaseExchange):
                             average_entry_price=Decimal(data["average_entry_price"]),
                             created_at=str(get_attribute(data, "created_at")))
 
-    async def __market_summary_websocket(self, _, message: dict) -> None:
-        data = message["params"]["data"]
-        if data['symbol'] == os.getenv("MARKET"):
-            self.mark_price = round(Decimal(data['mark_price']), int(os.getenv("PRICE_ROUND")))
+    # async def __market_summary_websocket(self, _, message: dict) -> None:
+    #     data = message["params"]["data"]
+    #     if data['symbol'] == os.getenv("MARKET"):
+    #         self.mark_price = round(Decimal(data['mark_price']), int(os.getenv("PRICE_ROUND")))
 
     async def __account_balance_websocket(self, _, message: dict) -> None:
         data = message["params"]["data"]
