@@ -39,7 +39,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: Ham1et/paradex-trading
+          slug: Ham1et/paradex-bot
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5
         env:

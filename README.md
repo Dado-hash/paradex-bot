@@ -1,8 +1,8 @@
 # Paradex Trading Bot (Market making strategy)
 
-![codecov](https://codecov.io/gh/Ham1et/paradex-trading/branch/master/graph/badge.svg?token=BI35N9WC5P)
-![GitHub Workflow Status](https://github.com/Ham1et/paradex-trading/actions/workflows/python-app.yml/badge.svg?branch=master)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=Ham1et_paradex-trading&metric=sqale_rating&token=9ead41c716e97b4fa1494690f2ab0bd204eb3462)](https://sonarcloud.io/summary/new_code?id=Ham1et_paradex-trading)
+![codecov](https://codecov.io/gh/Ham1et/paradex-bot/branch/master/graph/badge.svg?token=E6XtGNKslf)
+![GitHub Workflow Status](https://github.com/Ham1et/paradex-bot/actions/workflows/python-app.yml/badge.svg?branch=master)
+![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=Ham1et_paradex-bot&metric=sqale_rating&token=d4621e5830d7195cb9b8ad829049ce73773258ff)
 
 #### [Link to Paradex](https://app.paradex.trade/r/cp0x1) | Referral code - cp0x1 | -10% commission with referral code | [Referral Dashboard](https://www.paradex.trade/stats)
 
@@ -222,5 +222,3 @@ the same for all paris, while **low-liquidity** pairs provide **more points**.
 If you want to use this bot's trading strategies on other exchanges or to `STRATEGY_TYPE=2` on a different exchange for
 hedge, you need to implement an abstract class BaseExchange and pass the required exchange when initializing the
 strategy in `main()`.
-
-backpack_exchange_sdk==1.0.33

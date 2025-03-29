@@ -29,7 +29,7 @@ def log_setup():
         handlers.append(logging.FileHandler(directory + log_filename))
 
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=handlers
     )
