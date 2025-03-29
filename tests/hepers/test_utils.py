@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 
 from app.helpers.utils import random_decimal, get_random_size
+from app.models.exchange_type import ExchangeType
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -26,5 +27,5 @@ def test_get_random_size():
     max_size = Decimal("5.67")
 
     for _ in range(100):
-        result = get_random_size(min_size, max_size)
+        result = get_random_size(min_size, max_size, ExchangeType.PARADEX)
         assert min_size <= result <= max_size, f"Value {result} out of range"

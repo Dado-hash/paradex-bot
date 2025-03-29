@@ -1,13 +1,13 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
-from paradex_py.common.order import OrderSide
+from app.models.generic_order_side import GenericOrderSide
 
 
 @dataclass
 class DataOrder:
     id: str = None
-    side: OrderSide = None
+    side: GenericOrderSide = None
     price: Decimal = None
     size: Decimal = None
 

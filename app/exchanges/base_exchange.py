@@ -1,13 +1,15 @@
 from abc import ABC, abstractmethod
 from decimal import Decimal
 
-from paradex_py.common.order import OrderSide
-
 from app.models.data_order import DataOrder
 from app.models.data_position import DataPosition
+from app.models.exchange_type import ExchangeType
+from app.models.generic_order_side import GenericOrderSide
 
 
 class BaseExchange(ABC):
+    exchange_type: ExchangeType
+
     buy_orders_list: list[(Decimal, Decimal)] = []
     sell_orders_list: list[(Decimal, Decimal)] = []
 
@@ -23,17 +25,21 @@ class BaseExchange(ABC):
         pass
 
     @abstractmethod
-    def modify_limit_order(self, order_id: str, order_side: OrderSide, order_size: Decimal, price: Decimal,
+    async def setup(self):
+        pass
+
+    @abstractmethod
+    def modify_limit_order(self, order_id: str, order_side: GenericOrderSide, order_size: Decimal, price: Decimal,
                            is_reduce: bool = False) -> dict | None:
         pass
 
     @abstractmethod
-    def open_limit_order(self, order_side: OrderSide, order_size: Decimal, price: Decimal,
+    def open_limit_order(self, order_side: GenericOrderSide, order_size: Decimal, price: Decimal,
                          is_reduce: bool = False) -> dict | None:
         pass
 
     @abstractmethod
-    def open_market_order(self, order_side: OrderSide, order_size: Decimal, is_reduce: bool = False):
+    def open_market_order(self, order_side: GenericOrderSide, order_size: Decimal, is_reduce: bool = False):
         pass
 
     @abstractmethod

@@ -1,8 +1,7 @@
-import logging
 from dataclasses import dataclass
 from decimal import Decimal
 
-from app.models.position_side import PositionSide
+from app.models.generic_position_side import GenericPositionSide
 
 
 @dataclass
@@ -10,7 +9,7 @@ class DataPosition:
     id: str = None
     market: str = None
     size: Decimal = None
-    side: PositionSide = None
+    side: GenericPositionSide = None
     average_entry_price: Decimal = None
     created_at: str = None
 
