@@ -2,6 +2,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from app.bots.parallel_market_maker_bot import get_market_order_size
+from app.models.data_position import DataPosition
 
 
 def test_get_market_order_size_for_open_no_positions():
@@ -14,7 +15,7 @@ def test_get_market_order_size_for_open_no_positions():
 
 @patch("time.time", return_value=1700000000)
 def test_get_market_order_size_for_open_only_main_position(mock_time):
-    main_position = {"size": "5", "created_at": "1700000000000"}
+    main_position = DataPosition(size=Decimal(5), created_at="1700000000000")
     result = get_market_order_size(
         main_position,
         None
@@ -24,8 +25,8 @@ def test_get_market_order_size_for_open_only_main_position(mock_time):
 
 @patch("time.time", return_value=1700000000)
 def test_get_market_order_size_for_open_both_positions(mock_time):
-    main_position = {"size": "4", "created_at": "1700000000000"}
-    other_position = {"size": "6", "created_at": "1700000000000"}
+    main_position = DataPosition(size=Decimal(4), created_at="1700000000000")
+    other_position = DataPosition(size=Decimal(6), created_at="1700000000000")
     result = get_market_order_size(
         main_position,
         other_position
@@ -35,8 +36,8 @@ def test_get_market_order_size_for_open_both_positions(mock_time):
 
 @patch("time.time", return_value=1700000000)
 def test_get_market_order_size_for_open_time_other_to_close(mock_time):
-    main_position = {"size": "7", "created_at": "1699996300000"}
-    other_position = {"size": "3", "created_at": "1699996400001"}
+    main_position = DataPosition(size=Decimal(7), created_at="1699996300000")
+    other_position = DataPosition(size=Decimal(3), created_at="1699996400001")
     result = get_market_order_size(
         main_position,
         other_position
@@ -46,8 +47,8 @@ def test_get_market_order_size_for_open_time_other_to_close(mock_time):
 
 @patch("time.time", return_value=1700000000)
 def test_get_market_order_size_for_open_time_main_to_close(mock_time):
-    main_position = {"size": "5", "created_at": "1699996400001"}
-    other_position = {"size": "8", "created_at": "1699996300000"}
+    main_position = DataPosition(size=Decimal(5), created_at="1699996400001")
+    other_position = DataPosition(size=Decimal(8), created_at="1699996300000")
     result = get_market_order_size(
         main_position,
         other_position

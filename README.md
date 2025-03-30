@@ -11,7 +11,8 @@
 
 ## ⚠️ Disclaimer
 
-This software is for informational purposes only. It does not constitute financial advice, and users should conduct their own research before executing any trading strategies.
+This software is for informational purposes only. It does not constitute financial advice, and users should conduct
+their own research before executing any trading strategies.
 
 ### Initialize virtual environment
 
@@ -37,7 +38,7 @@ env $(cat environments/parallel/sub-1-2/.env.parallel.BERA | sed '/^\s*#/d; /^\s
 
 https://github.com/software-mansion/starknet.py/discussions/1141
 
-### Check ping to Paradex API server
+### Check ping to API server
 
 Ping is the main parameter that will affect the bot's speed and, accordingly, its competitiveness with other bots.
 
@@ -51,11 +52,12 @@ ping s3.ap-northeast-1.amazonaws.com
 
 ### Environments setup manual
 
-#### Account
+#### Exchange | Paradex
 
 Single
 
 ```dotenv
+EXCHANGE_TYPE=1# 1 - Paradex | 2 - Backpack
 L1_ADDRESS=# ETH public address
 L2_PRIVATE_KEY=# Paradox private key for account/sub
 ```
@@ -63,8 +65,40 @@ L2_PRIVATE_KEY=# Paradox private key for account/sub
 Parallel
 
 ```dotenv
+EXCHANGE_TYPE_1=1# 1 - Paradex | 2 - Backpack
 L1_ADDRESS_1=# ETH public address
 L2_PRIVATE_KEY_1=# Paradox private key for FIRST account/sub
+EXCHANGE_TYPE_2=1# 1 - Paradex | 2 - Backpack
+L1_ADDRESS_2=# ETH public address
+L2_PRIVATE_KEY_2=# Paradox private key for SECOND account/sub
+```
+
+#### Exchange | Backpack
+
+```dotenv
+EXCHANGE_TYPE=2# 1 - Paradex | 2 - Backpack
+API_KEY=
+API_SECRET=
+```
+
+Parallel
+
+```dotenv
+EXCHANGE_TYPE_1=2# 1 - Paradex | 2 - Backpack
+API_KEY_1=
+API_SECRET_1=
+EXCHANGE_TYPE_2=2# 1 - Paradex | 2 - Backpack
+API_KEY_2=
+API_SECRET_2=
+```
+
+#### Exchange | Parallel | Different
+
+```dotenv
+EXCHANGE_TYPE_1=2# 1 - Paradex | 2 - Backpack
+API_KEY_1=
+API_SECRET_1=
+EXCHANGE_TYPE_2=2# 1 - Paradex | 2 - Backpack
 L1_ADDRESS_2=# ETH public address
 L2_PRIVATE_KEY_2=# Paradox private key for SECOND account/sub
 ```
@@ -78,16 +112,29 @@ PING_SECONDS=0.3# Ping from your server to paradex server in seconds(Check Ping 
 INITIAL_CLOSE_ALL_POSITIONS=False/True# Put it True if you want to close all postions and orders before start trading
 ```
 
-#### Default for market
+#### Default for market | Paradex
 
 ```dotenv
 MARKET=BERA-USD-PERP
 PRICE_STEP=0.001
-PRICE_ROUND=3# Number of decimal places for min price step
-SIZE_ROUND=0# Number of decimal places for min order size step
+PRICE_ROUND=3# Number of decimal places for price step
+SIZE_ROUND=0# Number of decimal places for order size step
 MARKET_MIN_ORDER_SIZE=8# Minimal posible order size
 MAX_LEVERAGE=5
 ```
+
+#### Default for market | BackPack
+
+```dotenv
+BACKPACK_MARKET=BERA_USDC_PERP
+BACKPACK_PRICE_STEP=0.0001
+BACKPACK_PRICE_ROUND=4# Number of decimal places for price step
+BACKPACK_MARKET_MIN_ORDER_SIZE=0.1# Number of decimal places for order size step
+BACKPACK_SIZE_ROUND=1# Minimal posible order size
+MAX_LEVERAGE=5
+```
+
+If you use different exchanges, you need to add "Default for market" for both
 
 #### Params for analysis order price
 
