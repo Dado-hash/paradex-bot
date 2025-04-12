@@ -115,7 +115,7 @@ class ParadexExchange(BaseExchange):
         return DataPosition(id=data["id"], market=data["market"], size=Decimal(data["size"]),
                             side=GenericPositionSide(data["side"], ExchangeType.PARADEX),
                             average_entry_price=Decimal(data["average_entry_price"]),
-                            created_at=str(get_attribute(data, "created_at")))
+                            created_at=str(get_attribute(data, "created_at")) if get_attribute(data, "created_at") else None)
 
     # async def __market_summary_websocket(self, _, message: dict) -> None:
     #     data = message["params"]["data"]
