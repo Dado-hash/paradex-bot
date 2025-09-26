@@ -145,8 +145,8 @@ class HibachiExchange(BaseExchange):
             v = signed_message.v
             rsv_signature = f"{r:064x}{s:064x}{v:02x}"
             
-            # For now, let's try the full signature first (what we had before)
-            signature = full_signature
+            # Try the r,s format without recovery ID (128 hex chars)
+            signature = rs_signature
             
             # Ensure 0x prefix is present - but avoid double prefix!
             if not signature.startswith('0x'):
@@ -430,7 +430,7 @@ class HibachiExchange(BaseExchange):
                 
                 elif topic == 'orderbook':
                     # Hibachi orderbook format
-                    logging.info(f"Raw orderbook message: {data}")
+                    logging.debug(f"Raw orderbook message: {data}")
                     
                     # Extract data from Hibachi format
                     orderbook_data = data.get('data', {})
@@ -441,7 +441,7 @@ class HibachiExchange(BaseExchange):
                     bid_levels = bid_data.get('levels', [])
                     ask_levels = ask_data.get('levels', [])
                     
-                    logging.info(f"Hibachi orderbook - Bid levels: {len(bid_levels)}, Ask levels: {len(ask_levels)}")
+                    logging.debug(f"Hibachi orderbook - Bid levels: {len(bid_levels)}, Ask levels: {len(ask_levels)}")
                     
                     # If levels are empty, use start/end prices as fallback
                     if not bid_levels and not ask_levels:
@@ -450,7 +450,7 @@ class HibachiExchange(BaseExchange):
                         ask_start = ask_data.get('startPrice')
                         ask_end = ask_data.get('endPrice')
                         
-                        logging.info(f"Using price ranges - Bid: {bid_end}-{bid_start}, Ask: {ask_start}-{ask_end}")
+                        logging.debug(f"Using price ranges - Bid: {bid_end}-{bid_start}, Ask: {ask_start}-{ask_end}")
                         
                         # Create orderbook from price ranges
                         if bid_start and ask_start:
@@ -463,7 +463,7 @@ class HibachiExchange(BaseExchange):
                             best_ask = Decimal(str(ask_start))
                             self.mark_price = (best_bid + best_ask) / 2
                             
-                            logging.info(f"Updated orderbook from ranges - Bid: {best_bid}, Ask: {best_ask}, Mark: {self.mark_price}")
+                            logging.debug(f"Updated orderbook from ranges - Bid: {best_bid}, Ask: {best_ask}, Mark: {self.mark_price}")
                     else:
                         # Process levels if they exist
                         if bid_levels:
@@ -483,7 +483,7 @@ class HibachiExchange(BaseExchange):
                             best_bid = self.buy_orders_list[0][0]
                             best_ask = self.sell_orders_list[0][0] 
                             self.mark_price = (best_bid + best_ask) / 2
-                            logging.info(f"Updated orderbook from levels - {len(bid_levels)} bids, {len(ask_levels)} asks")
+                            logging.debug(f"Updated orderbook from levels - {len(bid_levels)} bids, {len(ask_levels)} asks")
             
             elif 'messageType' in data and data['messageType'] == 'Snapshot':
                 # Handle snapshot message format
@@ -549,6 +549,9 @@ class HibachiExchange(BaseExchange):
                     response_data = json.loads(response)
                     logging.info(f"Stream.start response: {response_data}")
 
+                    # Process the stream.start response to get initial balance
+                    await self._handle_hibachi_account_data(response_data)
+
                     # Reset retry count on successful connection
                     retry_count = 0
 
@@ -592,11 +595,14 @@ class HibachiExchange(BaseExchange):
                 if 'accountSnapshot' in data['result']:
                     # Handle the stream.start response
                     account_snapshot = data['result']['accountSnapshot']
+                    logging.info(f"🔍 Account snapshot received: {account_snapshot}")
                     balance = account_snapshot.get('balance')
                     if balance:
                         self._balance = Decimal(str(balance))
                         logging.info(f"✅ Updated Hibachi balance from snapshot: {self._balance}")
-                
+                    else:
+                        logging.warning(f"❌ No balance found in account snapshot: {account_snapshot}")
+
                 return
             
             # Handle different message types based on Hibachi WebSocket format
@@ -608,7 +614,9 @@ class HibachiExchange(BaseExchange):
                     balance = data.get('balance')
                     if balance is not None:
                         self._balance = Decimal(str(balance))
-                        logging.debug(f"Updated balance: {self._balance}")
+                        logging.info(f"💰 Updated balance from topic: {self._balance}")
+                    else:
+                        logging.warning(f"⚠️ Balance topic received but no balance value: {data}")
                 
                 elif topic == 'orders':
                     # Update orders from WebSocket

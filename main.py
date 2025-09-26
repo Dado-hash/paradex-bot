@@ -102,17 +102,20 @@ def check_balance(exchange: BaseExchange, max_size: Decimal):
         logging.warning(f"Skipping balance check for {exchange.exchange_type.value} - balance not loaded yet")
         return
 
+    order_size = Decimal(os.getenv("DEFAULT_ORDER_SIZE"))
+    current_price = exchange.buy_orders_list[0][0] if exchange.buy_orders_list else Decimal('0')
+
+    logging.info(f"Balance check for {exchange.exchange_type.value}:")
+    logging.info(f"  Balance: {exchange.balance}")
+    logging.info(f"  Order size: {order_size}")
+    logging.info(f"  Current price: {current_price}")
+    logging.info(f"  Required: {min_balance}")
+    logging.info(f"  Mark price: {exchange.mark_price}")
+    logging.info(f"  Balance check: {exchange.balance} >= {min_balance} = {exchange.balance >= min_balance}")
+
     if min_balance > exchange.balance:
         raise RuntimeError(
             f"Not enough money | Min: {min_balance} USDC | Max Leverage: {os.getenv('MAX_LEVERAGE')}")
-
-    order_size = Decimal(os.getenv("DEFAULT_ORDER_SIZE"))
-    logging.info(f"DEBUG Balance Check:")
-    logging.info(f"  Exchange: {exchange.exchange_type}")
-    logging.info(f"  Balance: {exchange.balance}")
-    logging.info(f"  Order size: {order_size}")
-    logging.info(f"  Mark price: {exchange.mark_price}")
-    logging.info(f"  Required: {order_size * exchange.mark_price / 10}")
 
 
 if __name__ == '__main__':
