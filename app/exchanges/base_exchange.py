@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from decimal import Decimal
+from typing import List, Tuple, Optional
 
 from app.models.data_order import DataOrder
 from app.models.data_position import DataPosition
@@ -10,15 +11,15 @@ from app.models.generic_order_side import GenericOrderSide
 class BaseExchange(ABC):
     exchange_type: ExchangeType
 
-    buy_orders_list: list[(Decimal, Decimal)] = []
-    sell_orders_list: list[(Decimal, Decimal)] = []
+    buy_orders_list: List[Tuple[Decimal, Decimal]] = []
+    sell_orders_list: List[Tuple[Decimal, Decimal]] = []
 
-    open_orders: list[DataOrder] = []
-    open_positions: list[DataPosition] = []
+    open_orders: List[DataOrder] = []
+    open_positions: List[DataPosition] = []
 
-    mark_price: Decimal | None = None
+    mark_price: Optional[Decimal] = None
 
-    balance: Decimal | None = None
+    balance: Optional[Decimal] = None
 
     @abstractmethod
     def __init__(self):

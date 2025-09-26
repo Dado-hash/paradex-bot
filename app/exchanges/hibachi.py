@@ -20,7 +20,7 @@ from app.models.data_order import DataOrder
 from app.models.data_position import DataPosition
 from app.models.exchange_type import ExchangeType
 from app.models.generic_order_side import GenericOrderSide, OrderSideEnum
-from app.models.generic_position_side import GenericPositionSide
+from app.models.generic_position_side import GenericPositionSide, PositionSideEnum
 
 
 class HibachiExchange(BaseExchange):
@@ -220,18 +220,27 @@ class HibachiExchange(BaseExchange):
             return None
 
     async def __init_data_streams(self):
-        """Initialize REST-only data streams for Hibachi"""
+        """Initialize WebSocket data streams for Hibachi (REST disabled to avoid rate limits)"""
         try:
-            logging.info("Initializing Hibachi REST-only data streams...")
+            logging.info("Initializing Hibachi WebSocket-only data streams...")
 
-            # Skip WebSocket connections, use REST API only
-            # Data collection loop (primary method)
-            asyncio.create_task(self.__init_data_loop())
+            # Wait a bit to avoid initial rate limits
+            await asyncio.sleep(2)
 
-            # Also get initial market data
-            asyncio.create_task(self._get_initial_market_data())
+            # Start WebSocket connections only
+            market_task = asyncio.create_task(self._connect_market_ws())
+            
+            # Wait a bit more before account WebSocket to stagger connections
+            await asyncio.sleep(1)
+            account_task = asyncio.create_task(self._connect_account_ws())
+            
+            # Only get initial market data once, then rely on WebSocket
+            # asyncio.create_task(self._get_initial_market_data())
+            
+            # Disable REST data loop to avoid rate limits
+            # asyncio.create_task(self.__init_data_loop())
 
-            logging.info("Hibachi REST data streams initialized")
+            logging.info("Hibachi WebSocket-only data streams initialized")
 
         except Exception as e:
             logging.error(f"Error initializing data streams: {e}")
@@ -281,103 +290,268 @@ class HibachiExchange(BaseExchange):
             logging.error(f"Error getting initial market data: {e}")
 
     async def _connect_market_ws(self):
-        """Connect to market data WebSocket"""
-        try:
-            market_symbol = os.getenv("HIBACHI_MARKET", "BTCUSDT")
-            # Try multiple possible WebSocket URL patterns for data-api
-            possible_urls = [
-                f"{self.ws_url}/ws/market",  # Standard pattern
-                f"{self.ws_url}/ws/stream",
-                f"{self.ws_url}/stream",
-                f"{self.ws_url}/ws",
-                "wss://data-api.hibachi.xyz/ws/market",
-                "wss://ws.hibachi.xyz/market"
-            ]
+        """Connect to market data WebSocket based on Hibachi API documentation"""
+        market_symbol = os.getenv("HIBACHI_MARKET", "ETH/USDT-P")
+        max_retries = 5
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # WebSocket URL from documentation
+                ws_url = f"{self.ws_url}/ws/market"
+                logging.info(f"Connecting to Hibachi WebSocket: {ws_url} (attempt {retry_count + 1})")
+                
+                async with websockets.connect(
+                    ws_url, 
+                    timeout=30,
+                    ping_interval=20,
+                    ping_timeout=10
+                ) as websocket:
+                    self._ws_connections['market'] = websocket
+                    logging.info(f"✅ Market WebSocket connected successfully")
 
-            for ws_url in possible_urls:
-                try:
-                    logging.info(f"Trying WebSocket URL: {ws_url}")
-                    async with websockets.connect(ws_url, timeout=10) as websocket:
-                        self._ws_connections['market'] = websocket
-                        logging.info(f"✅ Market WebSocket connected: {ws_url}")
-
-                        # Subscribe to order book
-                        subscribe_msg = {
-                            "method": "SUBSCRIBE",
-                            "params": [f"{market_symbol.lower()}@depth"],
-                            "id": 1
+                    # Subscribe to market data - based on Postman documentation
+                    # Subscribe to price updates
+                    subscribe_price_msg = {
+                        "method": "subscribe", 
+                        "parameters": {
+                            "subscriptions": [
+                                {
+                                    "symbol": market_symbol,
+                                    "topic": "mark_price"
+                                },
+                                {
+                                    "symbol": market_symbol, 
+                                    "topic": "spot_price"
+                                },
+                                {
+                                    "symbol": market_symbol,
+                                    "topic": "ask_bid_price"
+                                },
+                                {
+                                    "symbol": market_symbol,
+                                    "topic": "funding_rate_estimation"
+                                }
+                            ]
                         }
-                        await websocket.send(json.dumps(subscribe_msg))
+                    }
+                    
+                    await websocket.send(json.dumps(subscribe_price_msg))
+                    logging.info(f"Subscribed to market data for {market_symbol}")
 
-                        async for message in websocket:
-                            try:
-                                data = json.loads(message)
-                                await self._handle_market_data(data)
-                            except Exception as e:
-                                logging.error(f"Error processing market data: {e}")
-                        return  # Success, exit the loop
+                    # Subscribe to orderbook updates
+                    subscribe_orderbook_msg = {
+                        "method": "subscribe",
+                        "parameters": {
+                            "subscriptions": [
+                                {
+                                    "symbol": market_symbol,
+                                    "topic": "orderbook"
+                                }
+                            ]
+                        }
+                    }
+                    
+                    await websocket.send(json.dumps(subscribe_orderbook_msg))
+                    logging.info(f"Subscribed to orderbook for {market_symbol}")
 
-                except Exception as url_error:
-                    logging.warning(f"❌ Failed to connect to {ws_url}: {url_error}")
-                    continue  # Try next URL
+                    # Reset retry count on successful connection
+                    retry_count = 0
 
-            # If all URLs failed
-            logging.warning("⚠️ All WebSocket URLs failed, using REST API only for market data")
+                    # Listen for messages
+                    async for message in websocket:
+                        try:
+                            data = json.loads(message)
+                            await self._handle_hibachi_market_data(data)
+                        except Exception as e:
+                            logging.error(f"Error processing WebSocket market data: {e}")
+                            continue
+                            
+                    # If we reach here, connection was closed
+                    logging.warning("WebSocket connection closed, attempting to reconnect...")
 
+            except Exception as e:
+                retry_count += 1
+                logging.error(f"WebSocket connection error (attempt {retry_count}): {e}")
+                if retry_count < max_retries:
+                    wait_time = min(5 * retry_count, 30)  # Exponential backoff, max 30s
+                    logging.info(f"Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logging.error("Max WebSocket retries reached, activating REST fallback")
+                    # Activate REST fallback only when WebSocket completely fails
+                    asyncio.create_task(self._rest_fallback_mode())
+                    break
+
+        logging.warning("Market WebSocket connection attempts exhausted")
+
+    async def _handle_hibachi_market_data(self, data: Dict[Any, Any]):
+        """Handle market data from Hibachi WebSocket"""
+        try:
+            # Handle different message types based on Hibachi WebSocket format
+            if 'topic' in data:
+                topic = data.get('topic')
+                symbol = data.get('symbol', '')
+                
+                if topic == 'mark_price':
+                    # Update mark price
+                    mark_price = data.get('mark_price')
+                    if mark_price:
+                        self.mark_price = Decimal(str(mark_price))
+                        logging.debug(f"Updated mark price: {self.mark_price}")
+                
+                elif topic == 'ask_bid_price':
+                    # Update best bid/ask
+                    ask_price = data.get('ask_price')
+                    bid_price = data.get('bid_price')
+                    
+                    if bid_price and ask_price:
+                        # Simple order book with just best bid/ask
+                        self.buy_orders_list = [(Decimal(str(bid_price)), Decimal('1.0'))]
+                        self.sell_orders_list = [(Decimal(str(ask_price)), Decimal('1.0'))]
+                        self.mark_price = (Decimal(str(bid_price)) + Decimal(str(ask_price))) / 2
+                        logging.debug(f"Updated bid/ask: {bid_price}/{ask_price}")
+                
+                elif topic == 'orderbook':
+                    # Full orderbook update
+                    bids = data.get('bids', [])
+                    asks = data.get('asks', [])
+                    
+                    if bids:
+                        self.buy_orders_list = [
+                            (Decimal(str(bid['price'])), Decimal(str(bid['quantity'])))
+                            for bid in bids[:10]  # Top 10 levels
+                        ]
+                    
+                    if asks:
+                        self.sell_orders_list = [
+                            (Decimal(str(ask['price'])), Decimal(str(ask['quantity'])))
+                            for ask in asks[:10]  # Top 10 levels
+                        ]
+                    
+                    # Update mark price from orderbook
+                    if self.buy_orders_list and self.sell_orders_list:
+                        best_bid = self.buy_orders_list[0][0]
+                        best_ask = self.sell_orders_list[0][0] 
+                        self.mark_price = (best_bid + best_ask) / 2
+                        logging.debug(f"Updated orderbook: {len(bids)} bids, {len(asks)} asks")
+            
+            elif 'messageType' in data and data['messageType'] == 'Snapshot':
+                # Handle snapshot message format
+                logging.info("Received market data snapshot")
+                
         except Exception as e:
-            logging.error(f"Market WebSocket connection error: {e}")
-
-        # Reconnect after delay
-        await asyncio.sleep(5)
-        # Don't reconnect automatically for now to avoid spam
+            logging.error(f"Error handling market data: {e}")
+            logging.debug(f"Raw message: {data}")
 
     async def _connect_account_ws(self):
-        """Connect to account data WebSocket"""
-        try:
-            # Try multiple possible WebSocket URL patterns for account data
-            possible_urls = [
-                f"{self.ws_url}/ws/account",  # Standard private endpoint
-                f"{self.ws_url}/ws/user",
-                f"{self.ws_url}/account",
-                "wss://ws.hibachi.xyz/account"
-            ]
+        """Connect to account data WebSocket based on Hibachi API documentation"""
+        max_retries = 5
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # Account WebSocket URL - may need authentication
+                ws_url = f"{self.trade_base_url.replace('https', 'wss')}/ws/account"
+                
+                # Headers for authentication
+                headers = {"X-API-KEY": self.api_key} if self.api_key else {}
+                
+                logging.info(f"Connecting to Hibachi Account WebSocket: {ws_url} (attempt {retry_count + 1})")
+                
+                async with websockets.connect(
+                    ws_url, 
+                    extra_headers=headers,
+                    timeout=30,
+                    ping_interval=20,
+                    ping_timeout=10
+                ) as websocket:
+                    self._ws_connections['account'] = websocket
+                    logging.info(f"✅ Account WebSocket connected successfully")
 
-            headers = {"X-API-KEY": self.api_key}
-
-            for ws_url in possible_urls:
-                try:
-                    logging.info(f"Trying Account WebSocket URL: {ws_url}")
-                    async with websockets.connect(ws_url, extra_headers=headers, timeout=10) as websocket:
-                        self._ws_connections['account'] = websocket
-                        logging.info(f"✅ Account WebSocket connected: {ws_url}")
-
-                        # Subscribe to account updates
-                        subscribe_msg = {
-                            "method": "SUBSCRIBE",
-                            "params": ["account.balance", "account.orders", "account.positions"],
-                            "id": 2
+                    # Subscribe to account updates
+                    account_id = os.getenv("HIBACHI_ACCOUNT_ID")
+                    subscribe_msg = {
+                        "method": "subscribe",
+                        "parameters": {
+                            "subscriptions": [
+                                {
+                                    "accountId": account_id,
+                                    "topic": "balance"
+                                },
+                                {
+                                    "accountId": account_id,
+                                    "topic": "orders"
+                                },
+                                {
+                                    "accountId": account_id,
+                                    "topic": "positions"
+                                }
+                            ]
                         }
-                        await websocket.send(json.dumps(subscribe_msg))
+                    }
+                    
+                    await websocket.send(json.dumps(subscribe_msg))
+                    logging.info(f"Subscribed to account data for account {account_id}")
 
-                        async for message in websocket:
-                            try:
-                                data = json.loads(message)
-                                await self._handle_account_data(data)
-                            except Exception as e:
-                                logging.error(f"Error processing account data: {e}")
-                        return  # Success, exit the loop
+                    # Reset retry count on successful connection
+                    retry_count = 0
 
-                except Exception as url_error:
-                    logging.warning(f"❌ Failed to connect to account WS {ws_url}: {url_error}")
-                    continue  # Try next URL
+                    # Listen for messages
+                    async for message in websocket:
+                        try:
+                            data = json.loads(message)
+                            await self._handle_hibachi_account_data(data)
+                        except Exception as e:
+                            logging.error(f"Error processing WebSocket account data: {e}")
+                            continue
+                            
+                    # If we reach here, connection was closed
+                    logging.warning("Account WebSocket connection closed, attempting to reconnect...")
 
-            # If all URLs failed
-            logging.warning("⚠️ All Account WebSocket URLs failed, using REST API only")
+            except Exception as e:
+                retry_count += 1
+                logging.error(f"Account WebSocket connection error (attempt {retry_count}): {e}")
+                if retry_count < max_retries:
+                    wait_time = min(5 * retry_count, 30)  # Exponential backoff, max 30s
+                    logging.info(f"Retrying account WebSocket in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logging.error("Max account WebSocket retries reached")
+                    break
 
+        logging.warning("Account WebSocket connection attempts exhausted")
+
+    async def _handle_hibachi_account_data(self, data: Dict[Any, Any]):
+        """Handle account data from Hibachi WebSocket"""
+        try:
+            if 'topic' in data:
+                topic = data.get('topic')
+                
+                if topic == 'balance':
+                    # Update balance
+                    balance = data.get('balance')
+                    if balance is not None:
+                        self._balance = Decimal(str(balance))
+                        logging.debug(f"Updated balance: {self._balance}")
+                
+                elif topic == 'orders':
+                    # Update orders from WebSocket
+                    orders = data.get('orders', [])
+                    if orders:
+                        self._update_orders({'orders': orders})
+                        logging.debug(f"Updated {len(orders)} orders from WebSocket")
+                
+                elif topic == 'positions':
+                    # Update positions from WebSocket
+                    positions = data.get('positions', [])
+                    if positions:
+                        self._update_positions({'positions': positions})
+                        logging.debug(f"Updated {len(positions)} positions from WebSocket")
+                        
         except Exception as e:
-            logging.error(f"Account WebSocket connection error: {e}")
-
-        # Don't reconnect automatically for now
+            logging.error(f"Error handling account data: {e}")
+            logging.debug(f"Raw account message: {data}")
 
     async def _handle_market_data(self, data: Dict[Any, Any]):
         """Handle market data from WebSocket"""
@@ -407,60 +581,49 @@ class HibachiExchange(BaseExchange):
         elif data.get('e') == 'positionUpdate':
             await self._update_positions_from_ws(data)
 
-    async def __init_data_loop(self):
-        """Periodic data collection loop via REST API"""
+    async def _rest_fallback_mode(self):
+        """Emergency REST fallback when WebSocket completely fails"""
+        logging.warning("⚠️ Entering REST fallback mode due to WebSocket failures")
+        
         while True:
             try:
-                # Use longer interval for REST API to avoid rate limiting
-                await asyncio.sleep(max(float(os.getenv("PING_SECONDS", "0.3")), 2.0))
+                # Much slower polling to avoid rate limits
+                await asyncio.sleep(30)  # 30 second intervals
+                
+                market = os.getenv("HIBACHI_MARKET", "ETH/USDT-P")
 
-                market = os.getenv("HIBACHI_MARKET", "BTCUSDT")
+                # Get minimal market data
+                try:
+                    depth_data = await self._make_request("GET", "/market/data/orderbook",
+                                                        params={"symbol": market, "limit": 5}, auth=False)
+                    if depth_data and 'bids' in depth_data and 'asks' in depth_data:
+                        self.buy_orders_list = [
+                            (Decimal(str(bid[0])), Decimal(str(bid[1])))
+                            for bid in depth_data['bids'][:5]
+                        ]
+                        self.sell_orders_list = [
+                            (Decimal(str(ask[0])), Decimal(str(ask[1])))
+                            for ask in depth_data['asks'][:5]
+                        ]
 
-                # Get market data (order book)
-                depth_data = await self._make_request("GET", "/market/data/orderbook",
-                                                    params={"symbol": market, "limit": 10}, auth=False)
-                if depth_data and 'bids' in depth_data and 'asks' in depth_data:
-                    self.buy_orders_list = [
-                        (Decimal(str(bid[0])), Decimal(str(bid[1])))
-                        for bid in depth_data['bids'][:10]
-                    ]
-                    self.sell_orders_list = [
-                        (Decimal(str(ask[0])), Decimal(str(ask[1])))
-                        for ask in depth_data['asks'][:10]
-                    ]
-
-                    if self.buy_orders_list and self.sell_orders_list:
-                        best_bid = self.buy_orders_list[0][0]
-                        best_ask = self.sell_orders_list[0][0]
-                        self.mark_price = (best_bid + best_ask) / 2
-
-                # Get account info (includes balance and positions)
-                account_id = os.getenv("HIBACHI_ACCOUNT_ID")
-                if account_id:
-                    account_data = await self._make_request("GET", "/trade/account/info", params={"accountId": account_id}, use_trade_api=True)
-                else:
-                    account_data = await self._make_request("GET", "/trade/account/info", use_trade_api=True)
-
-                if account_data:
-                    # Update balance
-                    if 'balance' in account_data:
-                        self._balance = Decimal(str(account_data['balance']))
-
-                    # Update positions from account info
-                    if 'positions' in account_data:
-                        self._update_positions(account_data['positions'])
-
-                # Get open orders
-                if account_id:
-                    orders_data = await self._make_request("GET", "/trade/orders", params={"accountId": account_id}, use_trade_api=True)
-                else:
-                    orders_data = await self._make_request("GET", "/trade/orders", use_trade_api=True)
-                if orders_data:
-                    self._update_orders(orders_data)
-
+                        if self.buy_orders_list and self.sell_orders_list:
+                            best_bid = self.buy_orders_list[0][0]
+                            best_ask = self.sell_orders_list[0][0]
+                            self.mark_price = (best_bid + best_ask) / 2
+                            
+                        logging.debug("REST fallback: Updated market data")
+                except Exception as e:
+                    logging.error(f"REST fallback market data error: {e}")
+                
+                # Try to reconnect WebSocket periodically
+                if len(self._ws_connections) == 0:
+                    logging.info("Attempting to reconnect WebSocket from fallback mode...")
+                    asyncio.create_task(self._connect_market_ws())
+                    break  # Exit fallback mode to try WebSocket again
+                    
             except Exception as e:
-                logging.error(f"Error in data loop: {e}")
-                await asyncio.sleep(1)
+                logging.error(f"Error in REST fallback mode: {e}")
+                await asyncio.sleep(10)
 
     def _update_orders(self, orders_data):
         """Update open orders from REST API response"""
@@ -474,8 +637,7 @@ class HibachiExchange(BaseExchange):
                     id=str(order.get('orderId')),
                     size=Decimal(str(order.get('quantity', 0))),
                     price=Decimal(str(order.get('price', 0))),
-                    side=GenericOrderSide(OrderSideEnum.BUY if order.get('side', '').upper() == 'BUY' else OrderSideEnum.SELL),
-                    created_at=get_time_now_milliseconds()
+                    side=GenericOrderSide(OrderSideEnum.BUY if order.get('side', '').upper() == 'BUY' else OrderSideEnum.SELL, self.exchange_type)
                 )
                 self.open_orders.append(data_order)
             except Exception as e:
@@ -499,30 +661,48 @@ class HibachiExchange(BaseExchange):
                     entry_price = entry_notional / quantity if quantity != 0 else Decimal('0')
 
                     # For Hibachi, direction determines side, quantity is always positive
-                    side = GenericPositionSide.LONG if direction == 'Long' else GenericPositionSide.SHORT
+                    side_enum = PositionSideEnum.LONG if direction == 'Long' else PositionSideEnum.SHORT
+                    side = GenericPositionSide(side_enum, self.exchange_type)
 
                     # For short positions, represent size as negative for consistency
                     size = quantity if direction == 'Long' else -quantity
 
                     data_position = DataPosition(
+                        id=str(position.get('positionId', '')),
+                        market=position.get('symbol', ''),
                         size=size,
                         side=side,
-                        entry_price=entry_price,
-                        unrealized_pnl=Decimal(str(position.get('unrealizedTradingPnl', 0))),
-                        created_at=get_time_now_milliseconds()
+                        average_entry_price=entry_price
                     )
                     self.open_positions.append(data_position)
             except Exception as e:
                 logging.error(f"Error parsing Hibachi position: {e}")
 
+    async def cleanup(self):
+        """Cleanup connections and tasks"""
+        try:
+            # Close WebSocket connections
+            for name, ws in self._ws_connections.items():
+                if ws and not ws.closed:
+                    logging.info(f"Closing {name} WebSocket connection")
+                    await ws.close()
+            
+            self._ws_connections.clear()
+            
+            # Close HTTP session
+            if self._session and not self._session.closed:
+                await self._session.close()
+                
+            logging.info("Hibachi cleanup completed")
+        except Exception as e:
+            logging.error(f"Error during cleanup: {e}")
+
     async def _update_orders_from_ws(self, data):
-        """Update orders from WebSocket data"""
-        # Implementation for WebSocket order updates
+        """Update orders from WebSocket data - placeholder for future implementation"""
         pass
 
     async def _update_positions_from_ws(self, data):
-        """Update positions from WebSocket data"""
-        # Implementation for WebSocket position updates
+        """Update positions from WebSocket data - placeholder for future implementation"""
         pass
 
     def open_limit_order(self, order_side: GenericOrderSide, order_size: Decimal, price: Decimal, is_reduce: bool = False) -> dict | None:
@@ -565,7 +745,7 @@ class HibachiExchange(BaseExchange):
             result = loop.create_task(self._make_request("POST", "/trade/order", data=order_data, use_trade_api=True))
 
             logging.info(f"Placed limit order: {result}")
-            return result
+            return None  # For now return None, as async task can't be returned from sync method
 
         except Exception as e:
             logging.error(f"Error placing limit order: {e}")
@@ -609,7 +789,7 @@ class HibachiExchange(BaseExchange):
             result = loop.create_task(self._make_request("POST", "/trade/order", data=order_data, use_trade_api=True))
 
             logging.info(f"Placed market order: {result}")
-            return result
+            return None  # For now return None, as async task can't be returned from sync method
 
         except Exception as e:
             logging.error(f"Error placing market order: {e}")
@@ -657,8 +837,9 @@ class HibachiExchange(BaseExchange):
         """Close all open positions"""
         try:
             for position in self.open_positions:
-                side = GenericOrderSide(OrderSideEnum.SELL if position.side == GenericPositionSide.LONG else OrderSideEnum.BUY)
-                self.open_market_order(side, abs(position.size), is_reduce=True)
+                # Use the built-in method to get the opposite order side
+                opposite_side = position.side.opposite_order_side()
+                self.open_market_order(opposite_side, abs(position.size), is_reduce=True)
             logging.info("Closing all positions")
         except Exception as e:
             logging.error(f"Error closing all positions: {e}")
