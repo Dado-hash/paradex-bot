@@ -580,6 +580,26 @@ class HibachiExchange(BaseExchange):
     async def _handle_hibachi_account_data(self, data: Dict[Any, Any]):
         """Handle account data from Hibachi WebSocket"""
         try:
+            # Check for error messages first
+            if 'error' in data:
+                logging.error(f"Account WebSocket error: {data['error']}")
+                return
+            
+            # Check for success/confirmation messages
+            if 'result' in data:
+                logging.info(f"Account WebSocket result: {data['result']}")
+                
+                if 'accountSnapshot' in data['result']:
+                    # Handle the stream.start response
+                    account_snapshot = data['result']['accountSnapshot']
+                    balance = account_snapshot.get('balance')
+                    if balance:
+                        self._balance = Decimal(str(balance))
+                        logging.info(f"✅ Updated Hibachi balance from snapshot: {self._balance}")
+                
+                return
+            
+            # Handle different message types based on Hibachi WebSocket format
             if 'topic' in data:
                 topic = data.get('topic')
                 

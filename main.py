@@ -106,6 +106,14 @@ def check_balance(exchange: BaseExchange, max_size: Decimal):
         raise RuntimeError(
             f"Not enough money | Min: {min_balance} USDC | Max Leverage: {os.getenv('MAX_LEVERAGE')}")
 
+    order_size = Decimal(os.getenv("DEFAULT_ORDER_SIZE"))
+    logging.info(f"DEBUG Balance Check:")
+    logging.info(f"  Exchange: {exchange.exchange_type}")
+    logging.info(f"  Balance: {exchange.balance}")
+    logging.info(f"  Order size: {order_size}")
+    logging.info(f"  Mark price: {exchange.mark_price}")
+    logging.info(f"  Required: {order_size * exchange.mark_price / 10}")
+
 
 if __name__ == '__main__':
     asyncio.run(main())
