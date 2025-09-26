@@ -451,11 +451,19 @@ class HibachiExchange(BaseExchange):
         
         while retry_count < max_retries:
             try:
-                # Account WebSocket URL - may need authentication
-                ws_url = f"{self.trade_base_url.replace('https', 'wss')}/ws/account"
+                # Get account ID from environment
+                account_id = os.getenv("HIBACHI_ACCOUNT_ID")
+                if not account_id:
+                    logging.error("HIBACHI_ACCOUNT_ID not set in environment")
+                    return
                 
-                # Headers for authentication
-                headers = {"X-API-KEY": self.api_key} if self.api_key else {}
+                # Account WebSocket URL with accountId parameter as shown in docs
+                ws_url = f"{self.trade_base_url.replace('https', 'wss')}/ws/account?accountId={account_id}"
+                
+                # Headers for authentication - use API key directly as shown in docs
+                headers = {}
+                if self.api_key:
+                    headers["Authorization"] = self.api_key
                 
                 logging.info(f"Connecting to Hibachi Account WebSocket: {ws_url} (attempt {retry_count + 1})")
                 
@@ -469,30 +477,22 @@ class HibachiExchange(BaseExchange):
                     self._ws_connections['account'] = websocket
                     logging.info(f"✅ Account WebSocket connected successfully")
 
-                    # Subscribe to account updates
-                    account_id = os.getenv("HIBACHI_ACCOUNT_ID")
-                    subscribe_msg = {
-                        "method": "subscribe",
-                        "parameters": {
-                            "subscriptions": [
-                                {
-                                    "accountId": account_id,
-                                    "topic": "balance"
-                                },
-                                {
-                                    "accountId": account_id,
-                                    "topic": "orders"
-                                },
-                                {
-                                    "accountId": account_id,
-                                    "topic": "positions"
-                                }
-                            ]
+                    # First send stream.start as per documentation
+                    stream_start_msg = {
+                        "id": 123,
+                        "method": "stream.start",
+                        "params": {
+                            "accountId": int(account_id)
                         }
                     }
                     
-                    await websocket.send(json.dumps(subscribe_msg))
-                    logging.info(f"Subscribed to account data for account {account_id}")
+                    await websocket.send(json.dumps(stream_start_msg))
+                    logging.info(f"Sent stream.start for account {account_id}")
+                    
+                    # Wait for stream.start response before proceeding
+                    response = await websocket.recv()
+                    response_data = json.loads(response)
+                    logging.info(f"Stream.start response: {response_data}")
 
                     # Reset retry count on successful connection
                     retry_count = 0
