@@ -73,11 +73,15 @@ def get_best_order_price(exchange: BaseExchange, side: GenericOrderSide, max_ste
             step_gap = (price_2 - price_1) / step
 
             if step_gap >= max_steps_gap:
+                # Safety check for empty order book
+                best_bid = exchange.buy_orders_list[0][0] if exchange.buy_orders_list else exchange.mark_price or Decimal('0')
                 return Decimal(
-                    max(price_2 - step, exchange.buy_orders_list[0][0] + step,
+                    max(price_2 - step, best_bid + step,
                         (exchange.mark_price + step * Decimal(
                             os.getenv("MIN_MARK_PRICE_PRICE_GAPS"))) if exchange.mark_price else 0))
 
-        return max(orders[from_order][0] - step, exchange.buy_orders_list[0][0] + step,
+        # Safety check for empty order book
+        best_bid = exchange.buy_orders_list[0][0] if exchange.buy_orders_list else exchange.mark_price or Decimal('0')
+        return max(orders[from_order][0] - step, best_bid + step,
                    (exchange.mark_price + step * Decimal(
                        os.getenv("MIN_MARK_PRICE_PRICE_GAPS"))) if exchange.mark_price else 0)

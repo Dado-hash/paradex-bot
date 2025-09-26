@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  paradex-bot:
+    build: .
+    container_name: paradex-trading-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount logs directory to persist logs
+      - ./log:/app/log
+      # Mount .env file (optional, since it's already in env_file)
+      - ./.env:/app/.env:ro
+    # Network mode for better connectivity (optional)
+    network_mode: "host"
+    # Add memory and CPU limits (optional)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -112,17 +112,59 @@ class ParallelMarketMakerBot(BaseBot):
         self._exchange1 = exchange1
         self._exchange2 = exchange2
 
+    def _validate_trading_directions(self):
+        """Validate trading direction configuration"""
+        exchange1_side = os.getenv("EXCHANGE1_SIDE", "BUY").upper()
+        exchange2_side = os.getenv("EXCHANGE2_SIDE", "SELL").upper()
+        allow_same_direction = os.getenv("ALLOW_SAME_DIRECTION", "False").lower() == "true"
+
+        # Validate values
+        valid_sides = ["BUY", "SELL"]
+        if exchange1_side not in valid_sides:
+            raise ValueError(f"EXCHANGE1_SIDE must be BUY or SELL, got: {exchange1_side}")
+        if exchange2_side not in valid_sides:
+            raise ValueError(f"EXCHANGE2_SIDE must be BUY or SELL, got: {exchange2_side}")
+
+        # Check if same direction is allowed
+        if not allow_same_direction and exchange1_side == exchange2_side:
+            raise ValueError(f"Same direction trading not allowed. Both exchanges set to {exchange1_side}. Set ALLOW_SAME_DIRECTION=True to enable.")
+
+        # Log configuration
+        strategy_type = "HEDGING" if exchange1_side != exchange2_side else "DIRECTIONAL"
+        logging.warning(f"Trading Strategy: {strategy_type}")
+        logging.warning(f"  - {self._exchange1.exchange_type.value}: {exchange1_side} ({'LONG' if exchange1_side == 'BUY' else 'SHORT'})")
+        logging.warning(f"  - {self._exchange2.exchange_type.value}: {exchange2_side} ({'LONG' if exchange2_side == 'BUY' else 'SHORT'})")
+
+        if strategy_type == "DIRECTIONAL":
+            logging.warning("⚠️  WARNING: Both exchanges in same direction - this is NOT market neutral!")
+        else:
+            logging.info("✅ Market neutral hedging strategy configured")
+
     async def trading_loop(self):
+        # Validate trading directions configuration
+        self._validate_trading_directions()
+
         for _ in range(3):
             tasks = []
             try:
                 logging.critical("Trade START")
+
+                # Read configurable trading directions from .env
+                exchange1_side_str = os.getenv("EXCHANGE1_SIDE", "BUY").upper()
+                exchange2_side_str = os.getenv("EXCHANGE2_SIDE", "SELL").upper()
+
+                # Convert to enum
+                exchange1_side = OrderSideEnum.BUY if exchange1_side_str == "BUY" else OrderSideEnum.SELL
+                exchange2_side = OrderSideEnum.BUY if exchange2_side_str == "BUY" else OrderSideEnum.SELL
+
+                logging.info(f"Trading configuration: {self._exchange1.exchange_type.value}={exchange1_side_str}, {self._exchange2.exchange_type.value}={exchange2_side_str}")
+
                 tasks = [
                     asyncio.create_task(
-                        self.__side_trading(GenericOrderSide(OrderSideEnum.BUY, self._exchange1.exchange_type),
+                        self.__side_trading(GenericOrderSide(exchange1_side, self._exchange1.exchange_type),
                                             self._exchange1, self._exchange2)),
                     asyncio.create_task(
-                        self.__side_trading(GenericOrderSide(OrderSideEnum.SELL, self._exchange2.exchange_type),
+                        self.__side_trading(GenericOrderSide(exchange2_side, self._exchange2.exchange_type),
                                             self._exchange2, self._exchange1)),
                 ]
                 await asyncio.gather(*tasks)

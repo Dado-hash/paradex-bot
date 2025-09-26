@@ -10,6 +10,8 @@ def get_market():
         return os.getenv("MARKET")
     elif os.getenv("BACKPACK_MARKET"):
         return os.getenv("BACKPACK_MARKET")
+    elif os.getenv("HIBACHI_MARKET"):
+        return os.getenv("HIBACHI_MARKET")
 
 
 def log_setup():

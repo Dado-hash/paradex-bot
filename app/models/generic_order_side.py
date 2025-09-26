@@ -8,8 +8,8 @@ from app.models.exchange_type import ExchangeType
 
 
 class OrderSideEnum(Enum):
-    BUY = {ExchangeType.PARADEX: ParadexOrderSide.Buy.value, ExchangeType.BACKPACK: BackPackOrderSide.BID.value}
-    SELL = {ExchangeType.PARADEX: ParadexOrderSide.Sell.value, ExchangeType.BACKPACK: BackPackOrderSide.ASK.value}
+    BUY = {ExchangeType.PARADEX: ParadexOrderSide.Buy.value, ExchangeType.BACKPACK: BackPackOrderSide.BID.value, ExchangeType.HIBACHI: "BID"}
+    SELL = {ExchangeType.PARADEX: ParadexOrderSide.Sell.value, ExchangeType.BACKPACK: BackPackOrderSide.ASK.value, ExchangeType.HIBACHI: "ASK"}
 
 
 class GenericOrderSide:
