@@ -297,9 +297,10 @@ class HibachiExchange(BaseExchange):
         
         while retry_count < max_retries:
             try:
-                # WebSocket URL from documentation
+                # WebSocket URL from documentation - use market data endpoint
                 ws_url = f"{self.ws_url}/ws/market"
-                logging.info(f"Connecting to Hibachi WebSocket: {ws_url} (attempt {retry_count + 1})")
+                logging.info(f"Connecting to Hibachi Market WebSocket: {ws_url} (attempt {retry_count + 1})")
+                logging.info(f"Market symbol: {market_symbol}")
                 
                 async with websockets.connect(
                     ws_url, 
@@ -354,6 +355,7 @@ class HibachiExchange(BaseExchange):
                     
                     await websocket.send(json.dumps(subscribe_orderbook_msg))
                     logging.info(f"Subscribed to orderbook for {market_symbol}")
+                    logging.debug(f"Orderbook subscription message: {subscribe_orderbook_msg}")
 
                     # Reset retry count on successful connection
                     retry_count = 0
@@ -362,6 +364,7 @@ class HibachiExchange(BaseExchange):
                     async for message in websocket:
                         try:
                             data = json.loads(message)
+                            logging.debug(f"Received market WebSocket message: {data}")
                             await self._handle_hibachi_market_data(data)
                         except Exception as e:
                             logging.error(f"Error processing WebSocket market data: {e}")
@@ -388,10 +391,23 @@ class HibachiExchange(BaseExchange):
     async def _handle_hibachi_market_data(self, data: Dict[Any, Any]):
         """Handle market data from Hibachi WebSocket"""
         try:
+            logging.debug(f"Processing market data: {data}")
+            
+            # Check for error messages first
+            if 'error' in data:
+                logging.error(f"Market WebSocket error: {data['error']}")
+                return
+            
+            # Check for success/confirmation messages
+            if 'result' in data:
+                logging.info(f"Market WebSocket result: {data['result']}")
+                return
+            
             # Handle different message types based on Hibachi WebSocket format
             if 'topic' in data:
                 topic = data.get('topic')
                 symbol = data.get('symbol', '')
+                logging.debug(f"Processing topic: {topic}, symbol: {symbol}")
                 
                 if topic == 'mark_price':
                     # Update mark price
@@ -413,32 +429,71 @@ class HibachiExchange(BaseExchange):
                         logging.debug(f"Updated bid/ask: {bid_price}/{ask_price}")
                 
                 elif topic == 'orderbook':
-                    # Full orderbook update
-                    bids = data.get('bids', [])
-                    asks = data.get('asks', [])
+                    # Hibachi orderbook format
+                    logging.info(f"Raw orderbook message: {data}")
                     
-                    if bids:
-                        self.buy_orders_list = [
-                            (Decimal(str(bid['price'])), Decimal(str(bid['quantity'])))
-                            for bid in bids[:10]  # Top 10 levels
-                        ]
+                    # Extract data from Hibachi format
+                    orderbook_data = data.get('data', {})
+                    bid_data = orderbook_data.get('bid', {})
+                    ask_data = orderbook_data.get('ask', {})
                     
-                    if asks:
-                        self.sell_orders_list = [
-                            (Decimal(str(ask['price'])), Decimal(str(ask['quantity'])))
-                            for ask in asks[:10]  # Top 10 levels
-                        ]
+                    # Get levels from bid/ask data
+                    bid_levels = bid_data.get('levels', [])
+                    ask_levels = ask_data.get('levels', [])
                     
-                    # Update mark price from orderbook
-                    if self.buy_orders_list and self.sell_orders_list:
-                        best_bid = self.buy_orders_list[0][0]
-                        best_ask = self.sell_orders_list[0][0] 
-                        self.mark_price = (best_bid + best_ask) / 2
-                        logging.debug(f"Updated orderbook: {len(bids)} bids, {len(asks)} asks")
+                    logging.info(f"Hibachi orderbook - Bid levels: {len(bid_levels)}, Ask levels: {len(ask_levels)}")
+                    
+                    # If levels are empty, use start/end prices as fallback
+                    if not bid_levels and not ask_levels:
+                        bid_start = bid_data.get('startPrice')
+                        bid_end = bid_data.get('endPrice')
+                        ask_start = ask_data.get('startPrice')
+                        ask_end = ask_data.get('endPrice')
+                        
+                        logging.info(f"Using price ranges - Bid: {bid_end}-{bid_start}, Ask: {ask_start}-{ask_end}")
+                        
+                        # Create orderbook from price ranges
+                        if bid_start and ask_start:
+                            # Use the start prices as best bid/ask
+                            self.buy_orders_list = [(Decimal(str(bid_start)), Decimal('1.0'))]
+                            self.sell_orders_list = [(Decimal(str(ask_start)), Decimal('1.0'))]
+                            
+                            # Update mark price
+                            best_bid = Decimal(str(bid_start))
+                            best_ask = Decimal(str(ask_start))
+                            self.mark_price = (best_bid + best_ask) / 2
+                            
+                            logging.info(f"Updated orderbook from ranges - Bid: {best_bid}, Ask: {best_ask}, Mark: {self.mark_price}")
+                    else:
+                        # Process levels if they exist
+                        if bid_levels:
+                            self.buy_orders_list = [
+                                (Decimal(str(level['price'])), Decimal(str(level['quantity'])))
+                                for level in bid_levels[:10]  # Top 10 levels
+                            ]
+                        
+                        if ask_levels:
+                            self.sell_orders_list = [
+                                (Decimal(str(level['price'])), Decimal(str(level['quantity'])))
+                                for level in ask_levels[:10]  # Top 10 levels
+                            ]
+                        
+                        # Update mark price from levels
+                        if self.buy_orders_list and self.sell_orders_list:
+                            best_bid = self.buy_orders_list[0][0]
+                            best_ask = self.sell_orders_list[0][0] 
+                            self.mark_price = (best_bid + best_ask) / 2
+                            logging.info(f"Updated orderbook from levels - {len(bid_levels)} bids, {len(ask_levels)} asks")
             
             elif 'messageType' in data and data['messageType'] == 'Snapshot':
                 # Handle snapshot message format
                 logging.info("Received market data snapshot")
+            else:
+                # Unknown message format - log everything to understand structure
+                logging.warning(f"Unknown message format received: {data}")
+                if isinstance(data, dict):
+                    for key, value in data.items():
+                        logging.info(f"Message field: {key} = {value}")
                 
         except Exception as e:
             logging.error(f"Error handling market data: {e}")
