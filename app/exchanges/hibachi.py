@@ -107,47 +107,56 @@ class HibachiExchange(BaseExchange):
 
             # Using market parameters: contractId={contract_id}, decimals={underlying_decimals}/{settlement_decimals}
 
-            # Convert quantity and price from string to proper format
+            # Convert quantity/price strings
             quantity_str = str(order_data.get('quantity', '0'))
-            price_str = str(order_data.get('price', '0'))
+            price_str = str(order_data.get('price', '0')) or '0'
+            order_type = str(order_data.get('orderType', 'LIMIT')).upper()
 
-            # Parse quantity and price as floats then convert to fixed-point
+            # Fixed point conversions
             quantity_float = float(quantity_str)
-            price_float = float(price_str) if price_str else 0
-            price_multiplier = 2**32  # Fixed multiplier
-
-            # Convert quantity: quantity * 10^underlyingDecimals
             quantity_fixed = int(quantity_float * (10 ** underlying_decimals))
 
-            # Convert price: price * 2^32 * 10^(settlementDecimals - underlyingDecimals)
-            if price_float > 0:
-                price_exponent = settlement_decimals - underlying_decimals  # 6 - 10 = -4
-                price_fixed = int(price_float * price_multiplier * (10 ** price_exponent))
-            else:
-                price_fixed = 0
+            price_fixed = 0
+            if order_type == 'LIMIT':
+                # Only encode price for LIMIT orders – Hibachi digest for MARKET excludes price (32 bytes total)
+                try:
+                    price_float = float(price_str)
+                except ValueError:
+                    price_float = 0
+                if price_float > 0:
+                    price_multiplier = 2 ** 32
+                    price_exponent = settlement_decimals - underlying_decimals
+                    price_fixed = int(price_float * price_multiplier * (10 ** price_exponent))
 
-            # Side: ASK=0, BID=1 (as per documentation)
+            # Side mapping
             side_str = order_data.get('side', 'ASK')
             side_value = 1 if side_str == 'BID' else 0
 
-            # Max fees: convert from percentage to basis points * 10^8
-            # 0.00045 = 45 basis points = 45 * 10^6 (per docs example)
+            # Fees (always present in digest – for MARKET orders it appears as last 8 bytes)
             max_fees_percent = float(order_data.get('maxFeesPercent', '0.00045'))
-            fees_fixed = int(max_fees_percent * 10**8)
+            fees_fixed = int(max_fees_percent * 10 ** 8)
 
-            # Create binary buffer according to Hibachi spec (page 7)
-            # Order: nonce(8) + contractId(4) + quantity(8) + side(4) + price(8) + fees(8)
+            # Buffer layout differs by order type:
+            # MARKET: nonce(8) + contractId(4) + quantity(8) + side(4) + fees(8)           = 32 bytes
+            # LIMIT : nonce(8) + contractId(4) + quantity(8) + side(4) + price(8) + fees(8) = 40 bytes
             buffer = b''
-            buffer += struct.pack('>Q', nonce)           # 8 bytes - nonce
-            buffer += struct.pack('>I', contract_id)     # 4 bytes - contractId
-            buffer += struct.pack('>Q', quantity_fixed)  # 8 bytes - quantity
-            buffer += struct.pack('>I', side_value)      # 4 bytes - side
-            buffer += struct.pack('>Q', price_fixed)     # 8 bytes - price
-            buffer += struct.pack('>Q', fees_fixed)      # 8 bytes - maxFeesPercent
+            buffer += struct.pack('>Q', nonce)
+            buffer += struct.pack('>I', contract_id)
+            buffer += struct.pack('>Q', quantity_fixed)
+            buffer += struct.pack('>I', side_value)
+            if order_type == 'LIMIT':
+                buffer += struct.pack('>Q', price_fixed)
+            buffer += struct.pack('>Q', fees_fixed)
 
-            # Create SHA256 hash of the buffer (as per official docs)
             import hashlib
             msg_hash = hashlib.sha256(buffer).digest()
+
+            # Debug: show local digest (pre-hash) to compare with server error digest
+            try:
+                buffer_hex = buffer.hex()
+                logging.debug(f"Hibachi signing buffer ({len(buffer)} bytes) orderType={order_type}: {buffer_hex}")
+            except Exception:
+                pass
 
             # Sign with ECDSA
             account = Account.from_key(self.private_key)
@@ -911,8 +920,12 @@ class HibachiExchange(BaseExchange):
                 "maxFeesPercent": "0.00045"
             }
 
-            if price and order_type == "LIMIT":
+            # Always include price field for signature consistency
+            # For LIMIT orders use provided price, for MARKET orders use "0"
+            if order_type == "LIMIT" and price:
                 params["price"] = price
+            else:
+                params["price"] = "0"
 
             response = await self._send_trading_message("order.place", params)
 
