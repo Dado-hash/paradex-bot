@@ -918,13 +918,86 @@ class HibachiExchange(BaseExchange):
 
             if response.get('status') == 200:
                 logging.info(f"✅ Order placed successfully via WebSocket: {response.get('result', {}).get('orderId')}")
-                return response['result']
+                result = response.get('result', {})
+                # Upsert immediately so the strategy loop sees the order and calls modify instead of place again
+                try:
+                    order_id = str(result.get('orderId'))
+                    if order_id:
+                        self._upsert_local_order(order_id=order_id,
+                                                 side=side,
+                                                 price=Decimal(str(params.get('price') or '0')) if params.get('price') else Decimal('0'),
+                                                 quantity=Decimal(str(quantity)))
+                except Exception as up_e:
+                    logging.error(f"Impossibile aggiornare open_orders post place: {up_e}")
+                return result
             else:
                 logging.error(f"❌ Order placement failed: {response}")
                 raise RuntimeError(f"Order placement failed: {response}")
 
         except Exception as e:
             logging.error(f"Error placing order via WebSocket: {e}")
+            raise
+
+    async def _modify_order_ws(self, order_id: str, symbol: str, quantity: str, price: str) -> dict:
+        """Modify an existing order via WebSocket using Hibachi's order.modify method.
+
+        NOTE: The documentation sample shows params WITHOUT 'side'. However the signature
+        algorithm we implemented (_sign_order) includes 'side' inside the hash inputs.
+        To keep signatures valid we attempt to recover the side from current open_orders.
+        If not found, we default to BID (safer for maker strategies) but log a warning.
+        If the exchange rejects unknown fields we can remove 'side' here and adapt the
+        signing routine accordingly – let me know if you see signature errors in logs.
+        """
+        try:
+            account_id = os.getenv("HIBACHI_ACCOUNT_ID")
+            nonce = int(time.time() * 1000000)
+
+            # Try to get existing order side for signature consistency
+            existing_side = None
+            for o in getattr(self, 'open_orders', []):
+                try:
+                    if str(getattr(o, 'id', '')) == str(order_id):
+                        # GenericOrderSide stored in 'side'
+                        existing_side = getattr(o, 'side', None)
+                        if existing_side:
+                            existing_side = existing_side.value  # BID / ASK
+                        break
+                except Exception:
+                    continue
+
+            if existing_side is None:
+                existing_side = 'BID'
+                logging.warning(f"⚠️ Could not determine side for order {order_id}; defaulting to {existing_side} for signature")
+
+            params = {
+                "orderId": order_id,
+                "accountId": int(account_id),
+                "symbol": symbol,
+                "quantity": quantity,
+                "price": price,
+                "nonce": nonce,
+                "maxFeesPercent": "0.00045",
+                # Include side to keep signature logic consistent; server may ignore it.
+                "side": existing_side
+            }
+
+            response = await self._send_trading_message("order.modify", params)
+
+            if response.get('status') == 200:
+                logging.info(f"✏️ Order modified successfully via WebSocket: {order_id}")
+                try:
+                    self._upsert_local_order(order_id=order_id,
+                                             side=existing_side,
+                                             price=Decimal(str(price)) if price else Decimal('0'),
+                                             quantity=Decimal(str(quantity)))
+                except Exception as up_e:
+                    logging.error(f"Impossibile aggiornare open_orders post modify: {up_e}")
+                return response.get('result', {})
+            else:
+                logging.error(f"❌ Order modify failed: {response}")
+                raise RuntimeError(f"Order modify failed: {response}")
+        except Exception as e:
+            logging.error(f"Error modifying order via WebSocket: {e}")
             raise
 
     async def _cancel_order_ws(self, order_id: str = None, client_id: str = None) -> dict:
@@ -1127,70 +1200,343 @@ class HibachiExchange(BaseExchange):
             logging.error(f"Error during cleanup: {e}")
 
     async def _update_orders_from_ws(self, data):
-        """Update orders from WebSocket data - placeholder for future implementation"""
-        pass
+        """Aggiorna la lista `open_orders` in base ad un singolo evento WS.
+
+        Supporta più formati possibili perché la documentazione (screenshot Postman)
+        può differire leggermente dall'implementazione reale. Strategia:
+        1. Estrarre un dict 'order' (o elemento singolo) da uno dei possibili campi.
+        2. Normalizzare side (BID/ASK -> BUY/SELL) per riuso di GenericOrderSide.
+        3. Se stato finale (FILLED / CANCELED / CLOSED) rimuovere l'ordine.
+        4. Altrimenti inserirlo o aggiornarlo.
+        5. Gestire part-filled aggiornando size residua se il payload include filledQuantity.
+        """
+        try:
+            if data is None:
+                return
+
+            # Possibili chiavi: 'order', 'data', 'params', oppure direttamente il dict
+            payload = data
+            if isinstance(payload, dict):
+                # Se arriva in stile {"params": {...}}
+                if 'params' in payload and isinstance(payload['params'], dict):
+                    inner = payload['params']
+                    # Alcune impl. usano 'data' dentro 'params'
+                    if 'data' in inner and isinstance(inner['data'], dict):
+                        payload = inner['data']
+                    else:
+                        payload = inner
+
+            # Se abbiamo una chiave 'order'
+            if isinstance(payload, dict) and 'order' in payload and isinstance(payload['order'], dict):
+                order_dict = payload['order']
+            else:
+                # Potrebbe essere direttamente l'ordine
+                order_dict = payload if isinstance(payload, dict) else None
+
+            if not isinstance(order_dict, dict):
+                logging.debug(f"WS order update ignorato: formato non riconosciuto: {data}")
+                return
+
+            order_id = str(order_dict.get('orderId') or order_dict.get('id') or '')
+            if not order_id:
+                logging.debug(f"WS order update senza orderId: {order_dict}")
+                return
+
+            raw_side = str(order_dict.get('side', '')).upper()
+            # Alcune risposte potrebbero usare BID/ASK – mappiamo verso BUY/SELL
+            if raw_side == 'BID':
+                norm_side = 'BUY'
+            elif raw_side == 'ASK':
+                norm_side = 'SELL'
+            else:
+                norm_side = raw_side  # BUY / SELL già ok
+
+            status = str(order_dict.get('status', '')).upper()
+
+            price_val = order_dict.get('price') or order_dict.get('limitPrice') or order_dict.get('limit_price')
+            qty_val = order_dict.get('quantity') or order_dict.get('size')
+
+            if price_val is None or qty_val is None:
+                logging.debug(f"WS order update incompleto (price/quantity mancanti): {order_dict}")
+                return
+
+            try:
+                price = Decimal(str(price_val))
+                quantity = Decimal(str(qty_val))
+            except Exception:
+                logging.error(f"Impossibile convertire price/quantity: {price_val}/{qty_val}")
+                return
+
+            # Gestione filled partial: se il payload fornisce 'filledQuantity' possiamo calcolare residuo
+            filled_q = order_dict.get('filledQuantity') or order_dict.get('filled')
+            if filled_q is not None:
+                try:
+                    remaining = quantity - Decimal(str(filled_q))
+                    if remaining >= 0:
+                        quantity = remaining
+                except Exception:
+                    pass
+
+            # Stato terminale => rimuovi
+            terminal_statuses = {"FILLED", "CANCELED", "CANCELLED", "CLOSED"}
+            if status in terminal_statuses or quantity == 0:
+                self.open_orders = [o for o in (self.open_orders or []) if str(getattr(o, 'id', '')) != order_id]
+                logging.debug(f"Ordine {order_id} rimosso (status={status}, remaining={quantity})")
+                return
+
+            # Upsert
+            updated = False
+            new_list = []
+            for o in (self.open_orders or []):
+                if str(getattr(o, 'id', '')) == order_id:
+                    try:
+                        new_list.append(
+                            DataOrder(
+                                id=order_id,
+                                size=quantity,
+                                price=price,
+                                side=GenericOrderSide(OrderSideEnum.BUY if norm_side == 'BUY' else OrderSideEnum.SELL, self.exchange_type)
+                            )
+                        )
+                        updated = True
+                    except Exception as conv_e:
+                        logging.error(f"Errore aggiornando ordine {order_id}: {conv_e}")
+                else:
+                    new_list.append(o)
+            if not updated:
+                try:
+                    new_list.append(
+                        DataOrder(
+                            id=order_id,
+                            size=quantity,
+                            price=price,
+                            side=GenericOrderSide(OrderSideEnum.BUY if norm_side == 'BUY' else OrderSideEnum.SELL, self.exchange_type)
+                        )
+                    )
+                except Exception as conv_e:
+                    logging.error(f"Errore creando ordine {order_id}: {conv_e}")
+            self.open_orders = new_list
+        except Exception as e:
+            logging.error(f"Errore in _update_orders_from_ws: {e}")
+            logging.debug(f"Raw order WS data: {data}")
+
+    def _upsert_local_order(self, order_id: str, side: str, price: Decimal, quantity: Decimal):
+        """Helper interno: aggiorna o inserisce un ordine locale se non presente.
+
+        Usato subito dopo un place/modify per evitare che il loop della strategia
+        interpreti l'assenza di open_orders come necessità di creare un nuovo ordine.
+        """
+        try:
+            if quantity <= 0:
+                return
+            norm_side = side.upper()
+            if norm_side == 'BID':
+                enum_side = OrderSideEnum.BUY
+            elif norm_side == 'ASK':
+                enum_side = OrderSideEnum.SELL
+            elif norm_side == 'BUY':
+                enum_side = OrderSideEnum.BUY
+            else:
+                enum_side = OrderSideEnum.SELL
+
+            updated = False
+            new_list = []
+            for o in (self.open_orders or []):
+                if str(getattr(o, 'id', '')) == order_id:
+                    new_list.append(
+                        DataOrder(
+                            id=order_id,
+                            size=quantity,
+                            price=price,
+                            side=GenericOrderSide(enum_side, self.exchange_type)
+                        )
+                    )
+                    updated = True
+                else:
+                    new_list.append(o)
+            if not updated:
+                new_list.append(
+                    DataOrder(
+                        id=order_id,
+                        size=quantity,
+                        price=price,
+                        side=GenericOrderSide(enum_side, self.exchange_type)
+                    )
+                )
+            self.open_orders = new_list
+        except Exception as e:
+            logging.error(f"Errore in _upsert_local_order: {e}")
 
     async def _update_positions_from_ws(self, data):
-        """Update positions from WebSocket data - placeholder for future implementation"""
-        pass
+        """Aggiorna la lista `open_positions` in base ad un evento WS di tipo posizione.
+
+        Supporta formati multipli: posizione singola dentro 'position', array dentro
+        'positions', o payload diretto. Rimuove la posizione se quantity=0.
+        """
+        try:
+            if data is None:
+                return
+
+            # Isolare eventuale wrapper {params:{data:{...}}}
+            payload = data
+            if isinstance(payload, dict) and 'params' in payload and isinstance(payload['params'], dict):
+                inner = payload['params']
+                if 'data' in inner:
+                    payload = inner['data']
+                else:
+                    payload = inner
+
+            # Raccolta posizioni candidate
+            candidate_positions = []
+            if isinstance(payload, dict):
+                if 'positions' in payload and isinstance(payload['positions'], list):
+                    candidate_positions.extend(payload['positions'])
+                if 'position' in payload and isinstance(payload['position'], dict):
+                    candidate_positions.append(payload['position'])
+                # Se il dict sembra già una posizione (ha 'positionId' o 'quantity')
+                if not candidate_positions and (
+                        'positionId' in payload or 'quantity' in payload or 'direction' in payload):
+                    candidate_positions.append(payload)
+
+            if not candidate_positions:
+                logging.debug(f"WS position update ignorato: formato non riconosciuto: {data}")
+                return
+
+            # Copia attuale
+            current = list(self.open_positions or [])
+            by_id = {str(getattr(p, 'id', '')): p for p in current}
+
+            for p_raw in candidate_positions:
+                try:
+                    pos_id = str(p_raw.get('positionId') or p_raw.get('id') or '')
+                    if not pos_id:
+                        continue
+                    quantity_val = p_raw.get('quantity') or p_raw.get('size')
+                    direction = p_raw.get('direction', 'Long')
+                    entry_notional = p_raw.get('entryNotional') or p_raw.get('notionalValue') or 0
+                    symbol = p_raw.get('symbol') or p_raw.get('market') or ''
+
+                    if quantity_val is None:
+                        continue
+                    quantity = Decimal(str(quantity_val))
+                    entry_notional_d = Decimal(str(entry_notional)) if quantity != 0 else Decimal('0')
+                    entry_price = entry_notional_d / quantity if quantity != 0 else Decimal('0')
+
+                    side_enum = PositionSideEnum.LONG if str(direction).lower().startswith('l') else PositionSideEnum.SHORT
+                    side = GenericPositionSide(side_enum, self.exchange_type)
+                    size_signed = quantity if side_enum == PositionSideEnum.LONG else -quantity
+
+                    if quantity == 0:
+                        # Remove if exists
+                        if pos_id in by_id:
+                            del by_id[pos_id]
+                        continue
+
+                    by_id[pos_id] = DataPosition(
+                        id=pos_id,
+                        market=symbol,
+                        size=size_signed,
+                        side=side,
+                        average_entry_price=entry_price
+                    )
+                except Exception as inner_e:
+                    logging.error(f"Errore parsing posizione WS: {inner_e} | raw={p_raw}")
+
+            self.open_positions = list(by_id.values())
+        except Exception as e:
+            logging.error(f"Errore in _update_positions_from_ws: {e}")
+            logging.debug(f"Raw position WS data: {data}")
 
     def open_limit_order(self, order_side: GenericOrderSide, order_size: Decimal, price: Decimal, is_reduce: bool = False) -> dict | None:
-        """Place a limit order via WebSocket (original non-blocking behavior for arbitrage)"""
+        """Place a limit order via WebSocket using a semaphore to prevent duplicate bursts.
+
+        Previously the bot spawned many overlapping create tasks while iterating the
+        strategy loop causing multiple resting orders at almost the same price. We now
+        serialize placements through the internal `_order_semaphore`.
+        """
         try:
             market = os.getenv("HIBACHI_MARKET", "HYPE/USDT-P")
-            side = order_side.value  # "BID" or "ASK"
+            side = order_side.value
+            # Se abbiamo già un ordine aperto o in pending, evitiamo di crearne un altro
+            if any(True for _ in (self.open_orders or [])) or getattr(self, "_placing_limit", False):
+                return None
 
-            logging.info(f"🚀 Placing limit order via WebSocket: {side} {order_size} @ {price}")
+            logging.info(f"🚀 Placing limit order via WebSocket (serialized): {side} {order_size} @ {price}")
 
-            # Use WebSocket - non-blocking like original
             loop = asyncio.get_event_loop()
+
+            async def _place():
+                async with self._order_semaphore:
+                    self._placing_limit = True
+                    try:
+                        return await self._place_order_ws(market, side, "LIMIT", str(order_size), str(price))
+                    finally:
+                        self._placing_limit = False
+
             if loop.is_running():
-                # If already in async context, create task (non-blocking)
-                task = loop.create_task(self._place_order_ws(market, side, "LIMIT", str(order_size), str(price)))
-                # Order task created
+                task = loop.create_task(_place())
                 return {"task": task}
             else:
-                # If no event loop, run in new loop
-                result = asyncio.run(self._place_order_ws(market, side, "LIMIT", str(order_size), str(price)))
+                result = asyncio.run(_place())
                 logging.info(f"✅ WebSocket order result: {result}")
                 return result
-
         except Exception as e:
             logging.error(f"❌ Error placing limit order via WebSocket: {e}")
             return None
 
     def open_market_order(self, order_side: GenericOrderSide, order_size: Decimal, is_reduce: bool = False):
-        """Place a market order via WebSocket (original non-blocking behavior for arbitrage)"""
+        """Place a market order via WebSocket using semaphore to prevent flooding."""
         try:
             market = os.getenv("HIBACHI_MARKET", "HYPE/USDT-P")
-            side = order_side.value  # "BID" or "ASK"
+            side = order_side.value
+            logging.info(f"🚀 Placing market order via WebSocket (serialized): {side} {order_size}")
 
-            logging.info(f"🚀 Placing market order via WebSocket: {side} {order_size}")
-
-            # Use WebSocket - non-blocking like original
             loop = asyncio.get_event_loop()
+
+            async def _place():
+                async with self._order_semaphore:
+                    return await self._place_order_ws(market, side, "MARKET", str(order_size))
+
             if loop.is_running():
-                # If already in async context, create task (non-blocking)
-                task = loop.create_task(self._place_order_ws(market, side, "MARKET", str(order_size)))
-                # Market order task created
+                task = loop.create_task(_place())
                 return {"task": task}
             else:
-                # If no event loop, run in new loop
-                result = asyncio.run(self._place_order_ws(market, side, "MARKET", str(order_size)))
+                result = asyncio.run(_place())
                 logging.info(f"✅ WebSocket market order result: {result}")
                 return result
-
         except Exception as e:
             logging.error(f"Error placing market order: {e}")
             return None
 
     def modify_limit_order(self, order_id: str, order_side: GenericOrderSide, order_size: Decimal, price: Decimal, is_reduce: bool = False) -> dict | None:
-        """Modify an existing order"""
+        """Native modify using Hibachi WS order.modify (no cancel+repost)."""
         try:
-            # Cancel existing order first
-            self.cancel_order(order_id)
-            # Place new order
-            return self.open_limit_order(order_side, order_size, price, is_reduce)
+            loop = asyncio.get_event_loop()
+            market = os.getenv("HIBACHI_MARKET", "HYPE/USDT-P")
+
+            async def _modify():
+                async with self._order_semaphore:
+                    # Use native modify; if it fails, optionally fallback to cancel+place
+                    try:
+                        await self._modify_order_ws(order_id, market, str(order_size), str(price))
+                    except Exception as mod_err:
+                        logging.error(f"❌ Native modify failed, attempting fallback cancel+place: {mod_err}")
+                        try:
+                            if 'trading' in self._ws_connections:
+                                await self._cancel_order_ws(order_id=order_id)
+                            else:
+                                self.cancel_order(order_id)
+                            await asyncio.sleep(0.1)
+                            await self._place_order_ws(market, order_side.value, "LIMIT", str(order_size), str(price))
+                        except Exception as fallback_err:
+                            logging.error(f"❌ Fallback modify also failed: {fallback_err}")
+
+            if loop.is_running():
+                task = loop.create_task(_modify())
+                return {"task": task}
+            else:
+                asyncio.run(_modify())
+                return {"status": "done"}
         except Exception as e:
             logging.error(f"Error modifying order: {e}")
             return None

@@ -43,8 +43,15 @@ def get_best_order_price(exchange: BaseExchange, side: GenericOrderSide, max_ste
 
     if side == OrderSideEnum.BUY:
         orders = remove_exist_order_for_orders_list(exchange.buy_orders_list, exist_order)
-
+        if not orders:
+            # Fallback se non abbiamo ancora order book: usa mark_price o 0
+            base_price = exchange.mark_price or Decimal('0')
+            return base_price
         depth = min(depth, len(orders) - 1)
+        # Opposite side safety
+        if not exchange.sell_orders_list:
+            opp_best = (exchange.mark_price or orders[0][0]) + step
+            return min(orders[0][0] + step, opp_best)
 
         for i in range(from_order, depth):
             price_1, _ = orders[i]
@@ -63,8 +70,13 @@ def get_best_order_price(exchange: BaseExchange, side: GenericOrderSide, max_ste
                        os.getenv("MIN_MARK_PRICE_PRICE_GAPS"))) if exchange.mark_price else inf)
     else:
         orders = remove_exist_order_for_orders_list(exchange.sell_orders_list, exist_order)
-
+        if not orders:
+            base_price = exchange.mark_price or Decimal('0')
+            return base_price
         depth = min(depth, len(orders) - 1)
+        if not exchange.buy_orders_list:
+            opp_best = (exchange.mark_price or orders[0][0]) - step
+            return max(orders[0][0] - step, opp_best)
 
         for i in range(from_order, depth):
             price_1, _ = orders[i]
