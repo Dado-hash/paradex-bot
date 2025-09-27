@@ -192,6 +192,21 @@ class ParallelMarketMakerBot(BaseBot):
             main_position = next(iter(main_account.open_positions), None)
             other_position = next(iter(other_account.open_positions), None)
 
+            # ---------------- FULL HEDGE GUARD ----------------
+            try:
+                target_size = Decimal(os.getenv("DEFAULT_ORDER_SIZE"))
+                tolerance = Decimal(os.getenv("FULL_HEDGE_TOLERANCE", "0.0001"))
+                main_filled = main_position is not None and abs(Decimal(main_position.size)) >= target_size - tolerance
+                other_filled = other_position is not None and abs(Decimal(other_position.size)) >= target_size - tolerance
+                if main_filled and other_filled:
+                    if open_order is not None:
+                        logging.info(f"🛑 Full hedge reached on {main_account.exchange_type.value}. Cancelling residual order {open_order.id} (reason=FULL_HEDGE)")
+                        main_account.cancel_all_orders()
+                        await asyncio.sleep(float(os.getenv("PING_SECONDS")))
+                        continue
+            except Exception as hedge_eval_e:
+                logging.error(f"Full hedge evaluation error: {hedge_eval_e}")
+
             # HEDGE IMMEDIATO: se l'altra gamba ha già una posizione e questa no, opzionalmente apri subito market
             if os.getenv("IMMEDIATE_HEDGE_ON_FILL", "false").lower() == "true":
                 if main_position is None and other_position is not None and len(main_account.open_orders) == 0:
@@ -210,6 +225,8 @@ class ParallelMarketMakerBot(BaseBot):
             is_reduce = True if order_side != main_order_side else False
 
             if order_size is None or order_size <= 0:
+                if open_order is not None:
+                    logging.info(f"🗑️ Cancelling order {open_order.id} (reason=ZERO_OR_NONE_TARGET)")
                 main_account.cancel_all_orders()
                 await asyncio.sleep(1)
                 continue
@@ -231,10 +248,13 @@ class ParallelMarketMakerBot(BaseBot):
                                                   open_order.size)) if open_order is not None else None, 0)
 
             if open_order is None:
+                logging.info(f"📥 PLACE {main_account.exchange_type.value} side={order_side.value} size={order_size} price={best_price} reduce={is_reduce} (reason=NO_OPEN_ORDER)")
                 main_account.open_limit_order(order_side, order_size, best_price, is_reduce)
             else:
                 if best_price != Decimal(open_order.price):
-                    main_account.modify_limit_order(open_order.id, order_side, order_size, best_price,
-                                                    is_reduce)
+                    logging.info(f"✏️ MODIFY {main_account.exchange_type.value} order={open_order.id} new_price={best_price} size={order_size} reduce={is_reduce} (reason=PRICE_CHANGE from {open_order.price})")
+                    main_account.modify_limit_order(open_order.id, order_side, order_size, best_price, is_reduce)
+                else:
+                    logging.debug(f"⏸ HOLD {main_account.exchange_type.value} order={open_order.id} price={open_order.price} (reason=PRICE_UNCHANGED)")
 
             await asyncio.sleep(float(os.getenv("PING_SECONDS")))
