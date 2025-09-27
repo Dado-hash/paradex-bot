@@ -46,6 +46,13 @@ class HibachiExchange(BaseExchange):
         self._underlying_decimals = None
         self._settlement_decimals = None
 
+        # Order semaphore to prevent simultaneous orders
+        self._order_semaphore = asyncio.Semaphore(1)
+
+        # Single order tracking (like Paradex behavior)
+        self._has_pending_order = False
+        self._order_lock = asyncio.Lock()
+
     async def setup(self):
         self._session = aiohttp.ClientSession()
 
@@ -98,10 +105,7 @@ class HibachiExchange(BaseExchange):
             underlying_decimals = self._underlying_decimals or 7  # HYPE has 7 decimals
             settlement_decimals = self._settlement_decimals or 6
 
-            logging.info(f"Using market parameters:")
-            logging.info(f"  Contract ID: {contract_id}")
-            logging.info(f"  Underlying decimals: {underlying_decimals}")
-            logging.info(f"  Settlement decimals: {settlement_decimals}")
+            # Using market parameters: contractId={contract_id}, decimals={underlying_decimals}/{settlement_decimals}
 
             # Convert quantity and price from string to proper format
             quantity_str = str(order_data.get('quantity', '0'))
@@ -159,26 +163,7 @@ class HibachiExchange(BaseExchange):
             # Try without 0x prefix first (as docs say "65 bytes" not "0x + 65 bytes")
             signature = f"{r:064x}{s:064x}{v:02x}"
 
-            # Log signature info for debugging
-            logging.info(f"Generated signature (no 0x): {signature} (length: {len(signature)} chars)")
-            logging.info(f"Recovery ID (v): {v}")
-
-            # If this fails, we can try with 0x prefix by uncommenting below:
-            # signature = '0x' + signature
-            
-            # If this fails, we can try the r,s format by uncommenting below:
-            # signature = '0x' + rs_signature
-
-            logging.info(f"Hibachi order signing (corrected):")
-            logging.info(f"  Nonce: {nonce} -> {hex(nonce)}")
-            logging.info(f"  ContractId: {contract_id} -> {hex(contract_id)}")
-            logging.info(f"  Quantity: {quantity_float} -> {quantity_fixed} -> {hex(quantity_fixed)}")
-            logging.info(f"  Side: {side_str} -> {side_value} -> {hex(side_value)}")
-            logging.info(f"  Price: {price_float} -> {price_fixed} -> {hex(price_fixed)}")
-            logging.info(f"  Fees: {max_fees_percent} -> {fees_fixed} -> {hex(fees_fixed)}")
-            logging.info(f"  Buffer: {buffer.hex()}")
-            logging.info(f"  Keccak256: {msg_hash.hex()}")
-            logging.info(f"  Signature: {signature} (length: {len(signature)} chars)")
+            # Signature generated successfully
 
             return signature
 
@@ -211,11 +196,7 @@ class HibachiExchange(BaseExchange):
 
             signature = f"{r:064x}{s:064x}{v:02x}"
 
-            logging.info(f"Cancel nonce signature:")
-            logging.info(f"  Nonce: {nonce} -> {hex(nonce)}")
-            logging.info(f"  Buffer: {buffer.hex()}")
-            logging.info(f"  SHA256: {msg_hash.hex()}")
-            logging.info(f"  Signature: {signature} (length: {len(signature)} chars)")
+            # Cancel signature generated
 
             return signature
 
@@ -286,10 +267,7 @@ class HibachiExchange(BaseExchange):
                     self._underlying_decimals = market_info.get('underlyingDecimals')
                     self._settlement_decimals = market_info.get('settlementDecimals')
 
-                    logging.info(f"✅ Market parameters for {market}:")
-                    logging.info(f"  Contract ID: {self._contract_id}")
-                    logging.info(f"  Underlying decimals: {self._underlying_decimals}")
-                    logging.info(f"  Settlement decimals: {self._settlement_decimals}")
+                    # Market parameters loaded successfully
                     return
 
             # Market not found, use fallback
@@ -800,7 +778,7 @@ class HibachiExchange(BaseExchange):
                 request_info = self._pending_requests[data['id']]
                 method = request_info['method']
 
-                logging.info(f"🔄 Trading WebSocket response for {method}: {data}")
+                logging.debug(f"🔄 Trading response for {method}: {data}")
 
                 # Set the result for the waiting coroutine
                 request_info['future'].set_result(data)
@@ -869,7 +847,7 @@ class HibachiExchange(BaseExchange):
 
             # Send message
             message_json = json.dumps(message)
-            logging.info(f"📤 Sending trading WebSocket message: {method}")
+            # Sending trading message
             logging.debug(f"📤 Full message: {message_json}")
 
             await websocket.send(message_json)
@@ -890,6 +868,32 @@ class HibachiExchange(BaseExchange):
             if request_id is not None and request_id in self._pending_requests:
                 del self._pending_requests[request_id]
             raise
+
+    async def _place_order_with_semaphore(self, market: str, side: str, order_type: str, quantity: str, price: str = None) -> dict:
+        """Place order via WebSocket with semaphore to prevent simultaneous orders"""
+        async with self._order_semaphore:
+            try:
+                result = await self._place_order_ws(market, side, order_type, quantity, price)
+                return result
+            except Exception as e:
+                logging.error(f"Order failed: {e}")
+                raise
+
+    async def _place_single_order(self, market: str, side: str, order_type: str, quantity: str, price: str = None) -> dict:
+        """Place order via WebSocket with single order logic"""
+        async with self._order_lock:
+            if self._has_pending_order:
+                return None
+
+            self._has_pending_order = True
+            try:
+                result = await self._place_order_ws(market, side, order_type, quantity, price)
+                return result
+            except Exception as e:
+                logging.error(f"Single order failed: {e}")
+                raise
+            finally:
+                self._has_pending_order = False
 
     async def _place_order_ws(self, symbol: str, side: str, order_type: str, quantity: str, price: str = None) -> dict:
         """Place order via WebSocket"""
@@ -1131,21 +1135,19 @@ class HibachiExchange(BaseExchange):
         pass
 
     def open_limit_order(self, order_side: GenericOrderSide, order_size: Decimal, price: Decimal, is_reduce: bool = False) -> dict | None:
-        """Place a limit order via WebSocket"""
+        """Place a limit order via WebSocket (original non-blocking behavior for arbitrage)"""
         try:
             market = os.getenv("HIBACHI_MARKET", "HYPE/USDT-P")
             side = order_side.value  # "BID" or "ASK"
 
             logging.info(f"🚀 Placing limit order via WebSocket: {side} {order_size} @ {price}")
 
-            # Use WebSocket instead of REST API
+            # Use WebSocket - non-blocking like original
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # If already in async context, create task
+                # If already in async context, create task (non-blocking)
                 task = loop.create_task(self._place_order_ws(market, side, "LIMIT", str(order_size), str(price)))
-                # Since we can't await in sync method, we return the task
-                # The caller won't get the result, but the order will be placed
-                logging.info(f"✅ WebSocket order task created: {task}")
+                # Order task created
                 return {"task": task}
             else:
                 # If no event loop, run in new loop
@@ -1158,44 +1160,25 @@ class HibachiExchange(BaseExchange):
             return None
 
     def open_market_order(self, order_side: GenericOrderSide, order_size: Decimal, is_reduce: bool = False):
-        """Place a market order"""
+        """Place a market order via WebSocket (original non-blocking behavior for arbitrage)"""
         try:
-            market = os.getenv("HIBACHI_MARKET", "BTCUSDT")
-            side = order_side.value  # Now correctly returns "BID" or "ASK"
-            account_id = os.getenv("HIBACHI_ACCOUNT_ID")
+            market = os.getenv("HIBACHI_MARKET", "HYPE/USDT-P")
+            side = order_side.value  # "BID" or "ASK"
 
-            # Hibachi requires specific order structure
-            nonce = int(time.time() * 1000000)  # microseconds timestamp
-            client_id = f"bot-{uuid.uuid4().hex[:8]}"
+            logging.info(f"🚀 Placing market order via WebSocket: {side} {order_size}")
 
-            order_data = {
-                "accountId": int(account_id) if account_id else 128,
-                "symbol": market,
-                "nonce": nonce,
-                "orderType": "MARKET",
-                "side": side,  # "BID" or "ASK"
-                "quantity": str(order_size),
-                "maxFeesPercent": "0.00045",
-                "clientId": client_id
-            }
-
-            # Generate signature
-            signature = self._sign_order(order_data)
-            order_data["signature"] = signature
-
-            # Debug log the complete order payload
-            logging.info(f"Complete Hibachi order payload: {json.dumps(order_data, indent=2)}")
-
-            # Add optional fields if needed
-            if is_reduce:
-                # Hibachi might have different field name for reduce only
-                pass  # Check docs for correct field name
-
+            # Use WebSocket - non-blocking like original
             loop = asyncio.get_event_loop()
-            result = loop.create_task(self._make_request("POST", "/trade/order", data=order_data, use_trade_api=True))
-
-            logging.info(f"Placed market order: {result}")
-            return None  # For now return None, as async task can't be returned from sync method
+            if loop.is_running():
+                # If already in async context, create task (non-blocking)
+                task = loop.create_task(self._place_order_ws(market, side, "MARKET", str(order_size)))
+                # Market order task created
+                return {"task": task}
+            else:
+                # If no event loop, run in new loop
+                result = asyncio.run(self._place_order_ws(market, side, "MARKET", str(order_size)))
+                logging.info(f"✅ WebSocket market order result: {result}")
+                return result
 
         except Exception as e:
             logging.error(f"Error placing market order: {e}")
@@ -1252,7 +1235,7 @@ class HibachiExchange(BaseExchange):
             if loop.is_running():
                 # If already in async context, create task
                 task = loop.create_task(self._cancel_all_orders_ws())
-                logging.info(f"✅ WebSocket cancel all orders task created: {task}")
+                # Cancel orders task created
             else:
                 # If no event loop, run in new loop
                 result = asyncio.run(self._cancel_all_orders_ws())
