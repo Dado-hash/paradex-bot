@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from app.bots.base_bot import BaseBot
 from app.exchanges.base_exchange import BaseExchange
-from app.helpers.config import get_market_min_order_size_by_exchange
+from app.helpers.config import get_market_min_order_size_by_exchange, get_price_step_by_exchange
 from app.helpers.orders import get_best_order_price
 from app.helpers.utils import get_attribute
 from app.models.data_position import DataPosition
@@ -111,6 +111,11 @@ class ParallelMarketMakerBot(BaseBot):
     def __init__(self, exchange1: BaseExchange, exchange2: BaseExchange):
         self._exchange1 = exchange1
         self._exchange2 = exchange2
+        # Tracciamento ultime modifiche per throttling
+        self._last_modify_time: dict[str, float] = {}
+        self._last_price: dict[str, Decimal] = {}
+        # Cooldown hedge forzato
+        self._last_hedge_time: dict[str, float] = {}
 
     def _validate_trading_directions(self):
         """Validate trading direction configuration"""
@@ -209,16 +214,40 @@ class ParallelMarketMakerBot(BaseBot):
 
             # HEDGE IMMEDIATO: se l'altra gamba ha già una posizione e questa no, opzionalmente apri subito market
             if os.getenv("IMMEDIATE_HEDGE_ON_FILL", "false").lower() == "true":
-                if main_position is None and other_position is not None and len(main_account.open_orders) == 0:
-                    try:
-                        target_size = min(Decimal(os.getenv("DEFAULT_ORDER_SIZE")), abs(Decimal(other_position.size)))
+                try:
+                    force_market = os.getenv("IMMEDIATE_HEDGE_FORCE_MARKET", "false").lower() == "true"
+                    hedge_cooldown = float(os.getenv("HEDGE_COOLDOWN_SECONDS", "2"))
+                    tolerance = Decimal(os.getenv("HEDGE_SIZE_MATCH_TOLERANCE", "0.0001"))
+                    key = f"{main_account.exchange_type.value}:{main_order_side.value}:hedge"
+                    now = time.time()
+                    last_trigger = self._last_hedge_time.get(key, 0)
+                    need_size = False
+                    if other_position is not None:
+                        if main_position is None:
+                            need_size = True
+                        else:
+                            # Se l'altra posizione è maggiore della nostra oltre la tolleranza
+                            if abs(Decimal(other_position.size)) - abs(Decimal(main_position.size)) > tolerance:
+                                need_size = True
+                    if need_size and (now - last_trigger) >= hedge_cooldown:
+                        target_size = min(Decimal(os.getenv("DEFAULT_ORDER_SIZE")), abs(Decimal(other_position.size))) if other_position else Decimal(os.getenv("DEFAULT_ORDER_SIZE"))
                         if target_size > 0:
-                            logging.info(f"⚡ Immediate hedge: opening market {main_order_side.value} {target_size} on {main_account.exchange_type.value}")
-                            main_account.open_market_order(main_order_side, target_size, is_reduce=False)
-                            await asyncio.sleep(float(os.getenv("PING_SECONDS")))
-                            continue
-                    except Exception as hedge_e:
-                        logging.error(f"Immediate hedge error: {hedge_e}")
+                            if len(main_account.open_orders) > 0 and force_market:
+                                logging.info(f"⚡ Hedge force: cancel + market {main_order_side.value} size={target_size} on {main_account.exchange_type.value}")
+                                main_account.cancel_all_orders()
+                                await asyncio.sleep(0.05)
+                                main_account.open_market_order(main_order_side, target_size, is_reduce=False)
+                                self._last_hedge_time[key] = now
+                                await asyncio.sleep(float(os.getenv("PING_SECONDS")))
+                                continue
+                            elif len(main_account.open_orders) == 0:
+                                logging.info(f"⚡ Immediate hedge: market {main_order_side.value} size={target_size} on {main_account.exchange_type.value}")
+                                main_account.open_market_order(main_order_side, target_size, is_reduce=False)
+                                self._last_hedge_time[key] = now
+                                await asyncio.sleep(float(os.getenv("PING_SECONDS")))
+                                continue
+                except Exception as hedge_e:
+                    logging.error(f"Immediate hedge error: {hedge_e}")
 
             order_size, order_side = get_limit_order_size(main_order_side, main_position, other_position,
                                                           main_account.exchange_type)
@@ -247,14 +276,36 @@ class ParallelMarketMakerBot(BaseBot):
                                               (Decimal(open_order.price), Decimal(
                                                   open_order.size)) if open_order is not None else None, 0)
 
+            step = get_price_step_by_exchange(main_account.exchange_type)
+            key_mod = f"{main_account.exchange_type.value}:{order_side.value}"
+            min_ticks = Decimal(os.getenv("PRICE_MODIFY_MIN_TICKS", "2"))
+            modify_min_interval_ms = int(os.getenv("MODIFY_MIN_INTERVAL_MS", "300"))
+            now_ms = int(time.time() * 1000)
+            last_time = self._last_modify_time.get(key_mod, 0)
+            last_price = self._last_price.get(key_mod)
+
             if open_order is None:
                 logging.info(f"📥 PLACE {main_account.exchange_type.value} side={order_side.value} size={order_size} price={best_price} reduce={is_reduce} (reason=NO_OPEN_ORDER)")
                 main_account.open_limit_order(order_side, order_size, best_price, is_reduce)
+                self._last_price[key_mod] = best_price
+                self._last_modify_time[key_mod] = now_ms
             else:
-                if best_price != Decimal(open_order.price):
-                    logging.info(f"✏️ MODIFY {main_account.exchange_type.value} order={open_order.id} new_price={best_price} size={order_size} reduce={is_reduce} (reason=PRICE_CHANGE from {open_order.price})")
+                price_change_ticks = abs(best_price - Decimal(open_order.price)) / step if step > 0 else 0
+                interval_ok = (now_ms - last_time) >= modify_min_interval_ms
+                ticks_ok = price_change_ticks >= min_ticks
+                if best_price != Decimal(open_order.price) and interval_ok and ticks_ok:
+                    logging.info(f"✏️ MODIFY {main_account.exchange_type.value} order={open_order.id} new_price={best_price} size={order_size} reduce={is_reduce} (reason=PRICE_CHANGE {price_change_ticks:.2f} ticks >= {min_ticks})")
                     main_account.modify_limit_order(open_order.id, order_side, order_size, best_price, is_reduce)
+                    self._last_modify_time[key_mod] = now_ms
+                    self._last_price[key_mod] = best_price
                 else:
-                    logging.debug(f"⏸ HOLD {main_account.exchange_type.value} order={open_order.id} price={open_order.price} (reason=PRICE_UNCHANGED)")
+                    reason = []
+                    if best_price == Decimal(open_order.price):
+                        reason.append("PRICE_UNCHANGED")
+                    if not ticks_ok and best_price != Decimal(open_order.price):
+                        reason.append(f"DELTA<{min_ticks}t")
+                    if not interval_ok and best_price != Decimal(open_order.price):
+                        reason.append(f"COOLDOWN")
+                    logging.debug(f"⏸ HOLD {main_account.exchange_type.value} order={open_order.id} price={open_order.price} (reason={'+'.join(reason)})")
 
             await asyncio.sleep(float(os.getenv("PING_SECONDS")))
