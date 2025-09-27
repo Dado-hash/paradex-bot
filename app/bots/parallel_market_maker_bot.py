@@ -192,6 +192,19 @@ class ParallelMarketMakerBot(BaseBot):
             main_position = next(iter(main_account.open_positions), None)
             other_position = next(iter(other_account.open_positions), None)
 
+            # HEDGE IMMEDIATO: se l'altra gamba ha già una posizione e questa no, opzionalmente apri subito market
+            if os.getenv("IMMEDIATE_HEDGE_ON_FILL", "false").lower() == "true":
+                if main_position is None and other_position is not None and len(main_account.open_orders) == 0:
+                    try:
+                        target_size = min(Decimal(os.getenv("DEFAULT_ORDER_SIZE")), abs(Decimal(other_position.size)))
+                        if target_size > 0:
+                            logging.info(f"⚡ Immediate hedge: opening market {main_order_side.value} {target_size} on {main_account.exchange_type.value}")
+                            main_account.open_market_order(main_order_side, target_size, is_reduce=False)
+                            await asyncio.sleep(float(os.getenv("PING_SECONDS")))
+                            continue
+                    except Exception as hedge_e:
+                        logging.error(f"Immediate hedge error: {hedge_e}")
+
             order_size, order_side = get_limit_order_size(main_order_side, main_position, other_position,
                                                           main_account.exchange_type)
             is_reduce = True if order_side != main_order_side else False
