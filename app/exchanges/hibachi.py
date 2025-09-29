@@ -1456,6 +1456,9 @@ class HibachiExchange(BaseExchange):
                     logging.error(f"Errore parsing posizione WS: {inner_e} | raw={p_raw}")
 
             self.open_positions = list(by_id.values())
+            logging.info(f"🔄 POSITION UPDATE: HIBACHI - positions: {len(self.open_positions)}")
+            for pos in self.open_positions:
+                logging.info(f"📍 HIBACHI POSITION: size={pos.size}, side={pos.side.value}")
         except Exception as e:
             logging.error(f"Errore in _update_positions_from_ws: {e}")
             logging.debug(f"Raw position WS data: {data}")

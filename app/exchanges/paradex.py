@@ -92,7 +92,11 @@ class ParadexExchange(BaseExchange):
         if items_list == "open_orders":
             self.__setattr__(items_list, [self.__dict_to_order(x) for x in items])
         elif items_list == "open_positions":
-            self.__setattr__(items_list, [self.__dict_to_position(x) for x in items])
+            positions = [self.__dict_to_position(x) for x in items]
+            self.__setattr__(items_list, positions)
+            logging.info(f"🔄 POSITION UPDATE: PARADEX - positions: {len(positions)}")
+            for pos in positions:
+                logging.info(f"📍 PARADEX POSITION: size={pos.size}, side={pos.side.value}")
 
     async def __orders_websocket(self, _, message) -> None:
         data = message["params"]["data"]
