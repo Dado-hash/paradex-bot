@@ -1,0 +1,61 @@
+# PARADEX MARKET PARAMETERS
+# Source: https://api.prod.paradex.trade/v1/markets
+
+# Format: SYMBOL | PRICE_STEP | MIN_ORDER_SIZE | SIZE_ROUND | PRICE_ROUND
+
+# Major Cryptocurrencies
+BTC-USD-PERP | 0.1 | 0.0001 | 4 | 1
+ETH-USD-PERP | 0.01 | 0.001 | 3 | 2
+SOL-USD-PERP | 0.001 | 0.01 | 2 | 3
+BNB-USD-PERP | 0.1 | 0.01 | 2 | 1
+
+# Popular Alts/Memecoins
+HYPE-USD-PERP | 0.001 | 0.01 | 2 | 3
+VIRTUAL-USD-PERP | 0.001 | 0.01 | 2 | 3
+PUMP-USD-PERP | 0.001 | 0.01 | 2 | 3
+FARTCOIN-USD-PERP | 0.00001 | 0.001 | 3 | 5
+AI16Z-USD-PERP | 0.001 | 0.01 | 2 | 3
+PENGU-USD-PERP | 0.0001 | 0.1 | 1 | 4
+NEIRO-USD-PERP | 0.00001 | 0.1 | 1 | 5
+NEWT-USD-PERP | 0.00001 | 0.01 | 2 | 5
+
+# DeFi/L1 Tokens
+TIA-USD-PERP | 0.01 | 0.01 | 2 | 2
+STRK-USD-PERP | 0.0001 | 0.1 | 1 | 4
+TON-USD-PERP | 0.001 | 0.01 | 2 | 3
+FIL-USD-PERP | 0.001 | 0.01 | 2 | 3
+BCH-USD-PERP | 0.1 | 0.001 | 3 | 1
+TRX-USD-PERP | 0.00001 | 1 | 0 | 5
+
+# Other Notable Tokens
+PYTH-USD-PERP | 0.0001 | 0.1 | 1 | 4
+USUAL-USD-PERP | 0.0001 | 0.1 | 1 | 4
+VINE-USD-PERP | 0.00001 | 0.01 | 2 | 5
+HUMA-USD-PERP | 0.0001 | 0.1 | 1 | 4
+APEX-USD-PERP | 0.0001 | 0.1 | 1 | 4
+WOO-USD-PERP | 0.0001 | 0.1 | 1 | 4
+DOLO-USD-PERP | 0.00001 | 0.01 | 2 | 5
+WAL-USD-PERP | 0.00001 | 0.01 | 2 | 5
+NIL-USD-PERP | 0.0001 | 0.1 | 1 | 4
+SOPH-USD-PERP | 0.001 | 0.01 | 2 | 3
+kSHIB-USD-PERP | 0.00000001 | 1000 | 0 | 8
+kPEPE-USD-PERP | 0.00000001 | 1000 | 0 | 8
+
+# .ENV TEMPLATE FOR PARADEX
+# For the market you want to trade, use this format:
+
+# For BTC:
+# MARKET=BTC-USD-PERP
+
+# For HYPE (current):
+# MARKET=HYPE-USD-PERP
+
+# Common Trading Parameters:
+# - Minimum notional: $50-$100
+# - Cross margin trading
+# - Zero or near-zero maker fees
+# - Position limits vary by asset
+
+# Note: Paradex uses different naming convention:
+# - Hibachi: SYMBOL/USDT-P
+# - Paradex: SYMBOL-USD-PERP
